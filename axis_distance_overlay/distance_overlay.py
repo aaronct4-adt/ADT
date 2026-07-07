@@ -315,11 +315,18 @@ class OverlayLine:
     def color_rgba(self):
         return LINE_COLORS.get(self.color_name, LINE_COLORS["White"])
 
-    def get_extended_points(self, img_width, img_height):
-        """Calculate line endpoints, optionally extended to image edges.
+    def get_extended_points(self, img_width, img_height, bounds=None):
+        """Calculate line endpoints, optionally extended to boundaries.
 
-        When extended, the line is projected to whichever image boundary
+        When extended, the line is projected to whichever boundary
         it hits first (top, bottom, left, or right).
+
+        Args:
+            img_width: Full image width
+            img_height: Full image height
+            bounds: Optional (x_min, y_min, x_max, y_max) tuple defining
+                    the region the line should be constrained to.
+                    If None, uses full image (0, 0, img_width-1, img_height-1).
         """
         x1, y1 = self.pt1
         x2, y2 = self.pt2
@@ -332,62 +339,62 @@ class OverlayLine:
         if not self.extend_left and not self.extend_right:
             return self.pt1, self.pt2
 
+        # Determine boundary limits
+        if bounds:
+            bx_min, by_min, bx_max, by_max = bounds
+        else:
+            bx_min, by_min, bx_max, by_max = 0, 0, img_width - 1, img_height - 1
+
         # Vertical line (dx == 0)
         if dx == 0:
-            top = (x1, 0) if self.extend_left else self.pt1
-            bot = (x1, img_height - 1) if self.extend_right else self.pt2
+            top = (x1, by_min) if self.extend_left else self.pt1
+            bot = (x1, by_max) if self.extend_right else self.pt2
             return top, bot
 
         # Horizontal line (dy == 0)
         if dy == 0:
-            left = (0, y1) if self.extend_left else self.pt1
-            right = (img_width - 1, y1) if self.extend_right else self.pt2
+            left = (bx_min, y1) if self.extend_left else self.pt1
+            right = (bx_max, y1) if self.extend_right else self.pt2
             return left, right
 
-        # General case: angled line - find intersection with image boundaries
-        # Line parameterized as: P = pt1 + t * (pt2 - pt1)
-        # Extend "left" = extend backward from pt1 (t < 0 direction)
-        # Extend "right" = extend forward from pt2 (t > 1 direction)
-
+        # General case: angled line - find intersection with boundaries
         def clip_to_boundary(px, py, vx, vy):
             """From point (px,py) going in direction (vx,vy), find where
-            it hits the image boundary. Returns the boundary point."""
+            it hits the boundary. Returns the boundary point."""
             candidates = []
-            # Left edge: x=0
+            # Left edge: x=bx_min
             if vx != 0:
-                t = (0 - px) / vx
+                t = (bx_min - px) / vx
                 if t > 0:
                     yy = py + t * vy
-                    if 0 <= yy <= img_height - 1:
-                        candidates.append((t, (0, int(yy))))
-            # Right edge: x=img_width-1
+                    if by_min <= yy <= by_max:
+                        candidates.append((t, (bx_min, int(yy))))
+            # Right edge: x=bx_max
             if vx != 0:
-                t = (img_width - 1 - px) / vx
+                t = (bx_max - px) / vx
                 if t > 0:
                     yy = py + t * vy
-                    if 0 <= yy <= img_height - 1:
-                        candidates.append((t, (img_width - 1, int(yy))))
-            # Top edge: y=0
+                    if by_min <= yy <= by_max:
+                        candidates.append((t, (bx_max, int(yy))))
+            # Top edge: y=by_min
             if vy != 0:
-                t = (0 - py) / vy
+                t = (by_min - py) / vy
                 if t > 0:
                     xx = px + t * vx
-                    if 0 <= xx <= img_width - 1:
-                        candidates.append((t, (int(xx), 0)))
-            # Bottom edge: y=img_height-1
+                    if bx_min <= xx <= bx_max:
+                        candidates.append((t, (int(xx), by_min)))
+            # Bottom edge: y=by_max
             if vy != 0:
-                t = (img_height - 1 - py) / vy
+                t = (by_max - py) / vy
                 if t > 0:
                     xx = px + t * vx
-                    if 0 <= xx <= img_width - 1:
-                        candidates.append((t, (int(xx), img_height - 1)))
+                    if bx_min <= xx <= bx_max:
+                        candidates.append((t, (int(xx), by_max)))
             if candidates:
-                # Return the nearest boundary intersection
                 candidates.sort(key=lambda c: c[0])
                 return candidates[0][1]
             return (int(px), int(py))
 
-        # Direction vector from pt1 to pt2
         # Extend left: go backward from pt1
         if self.extend_left:
             left_pt = clip_to_boundary(x1, y1, -dx, -dy)
@@ -422,13 +429,14 @@ class OverlayGenerator:
         self.font_size = config["overlay_font_size"]
         self.text_color = tuple(config["overlay_text_color"])
 
-    def generate_overlay(self, width, height, lines):
+    def generate_overlay(self, width, height, lines, quad_mode=False):
         """Generate a transparent PNG overlay from OverlayLine objects.
 
         Args:
             width: Image width in pixels
             height: Image height in pixels
             lines: List of OverlayLine objects
+            quad_mode: If True, clamp line extensions to their quadrant
 
         Returns:
             PIL Image object (RGBA)
@@ -439,7 +447,14 @@ class OverlayGenerator:
 
         for line in lines:
             color = line.color_rgba
-            pt_a, pt_b = line.get_extended_points(width, height)
+
+            # Determine bounds for extension
+            if quad_mode:
+                bounds = self._get_quadrant_bounds(line, width, height)
+            else:
+                bounds = None
+
+            pt_a, pt_b = line.get_extended_points(width, height, bounds)
 
             # Draw the line with thickness
             draw.line([pt_a, pt_b], fill=color, width=self.line_thickness)
@@ -481,6 +496,35 @@ class OverlayGenerator:
 
         return overlay
 
+
+    def _get_quadrant_bounds(self, line, width, height):
+        """Determine which quadrant the line's center belongs to and return
+        the boundary box (x_min, y_min, x_max, y_max) for that quadrant.
+
+        Quad layout:
+            Top-Left (cam 1)     | Top-Right (cam 2)
+            -----------------------------------------
+            Bottom-Left (cam 3)  | Bottom-Right (cam 4)
+        """
+        mid_x = width // 2
+        mid_y = height // 2
+
+        # Use the midpoint of the line's two defined points
+        center_x = (line.pt1[0] + line.pt2[0]) // 2
+        center_y = (line.pt1[1] + line.pt2[1]) // 2
+
+        if center_x < mid_x and center_y < mid_y:
+            # Top-left quadrant
+            return (0, 0, mid_x - 1, mid_y - 1)
+        elif center_x >= mid_x and center_y < mid_y:
+            # Top-right quadrant
+            return (mid_x, 0, width - 1, mid_y - 1)
+        elif center_x < mid_x and center_y >= mid_y:
+            # Bottom-left quadrant
+            return (0, mid_y, mid_x - 1, height - 1)
+        else:
+            # Bottom-right quadrant
+            return (mid_x, mid_y, width - 1, height - 1)
 
     def _get_font(self):
         """Get a suitable font for the overlay text."""
@@ -761,8 +805,14 @@ class DistanceOverlayApp:
         h, w = img_rgb.shape[:2]
 
         # Draw all lines on preview
+        is_quad = (self._get_camera_value() == "quad")
         for line in self.lines:
-            pt_a, pt_b = line.get_extended_points(w, h)
+            # In quad mode, clamp to quadrant boundaries
+            if is_quad:
+                bounds = self.generator._get_quadrant_bounds(line, w, h)
+            else:
+                bounds = None
+            pt_a, pt_b = line.get_extended_points(w, h, bounds)
             # Convert RGBA to RGB for cv2
             color_rgb = line.color_rgba[:3]
             cv2.line(img_rgb, pt_a, pt_b, color_rgb, 2)
@@ -1080,7 +1130,9 @@ class DistanceOverlayApp:
         self.root.update()
 
         try:
-            overlay_img = self.generator.generate_overlay(w, h, self.lines)
+            is_quad = (camera == "quad")
+            overlay_img = self.generator.generate_overlay(
+                w, h, self.lines, quad_mode=is_quad)
 
             temp_dir = Path(os.path.dirname(os.path.abspath(sys.argv[0])))
             cam_label = "quad" if camera == "quad" else str(camera)
