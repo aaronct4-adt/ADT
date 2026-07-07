@@ -3,12 +3,14 @@
     "username": "root",
     "password": "root",
     "distances_meters": [0, 5, 10],
-    "tape_color_hsv_lower": [35, 80, 80],
+    "tape_color_hsv_lower": [35, 50, 50],
     "tape_color_hsv_upper": [85, 255, 255],
+    "hsv_tolerance": 25,
     "overlay_line_color": [255, 255, 255, 200],
     "overlay_text_color": [255, 255, 255, 255],
     "overlay_line_thickness": 3,
     "overlay_font_size": 24,
-    "min_tape_width_ratio": 0.15,
+    "min_tape_width_ratio": 0.05,
+    "min_tape_height_ratio": 0.005,
     "snapshot_timeout": 10
 }

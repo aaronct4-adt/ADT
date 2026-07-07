@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
 """
-Axis F1194 Distance Overlay Tool
+Axis F1194 Distance Overlay Tool v2.0
 
-Captures a snapshot from an Axis encoder channel, detects green tape lines
+Captures a snapshot from an Axis encoder channel, detects colored tape lines
 on the road, generates a transparent overlay image with distance markers,
 and uploads it to the encoder via VAPIX API.
+
+Features:
+- Eyedropper color picker for tape detection
+- Adjustable detection sensitivity
+- Per-line color selection
+- Alphabetical line labels (A, B, C...)
+- Two-point angled/vertical line support
+- Extend lines to edges
+- Quad view overlay support (cameras 1-4 + Quad)
 
 Usage: Run the executable or script - a GUI will appear.
 """
@@ -12,8 +21,10 @@ Usage: Run the executable or script - a GUI will appear.
 import sys
 import os
 import json
+import string
+import math
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox, colorchooser
 from io import BytesIO
 from pathlib import Path
 
@@ -22,6 +33,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 import requests
 from requests.auth import HTTPDigestAuth
+
 
 
 # =============================================================================
@@ -33,29 +45,43 @@ DEFAULT_CONFIG = {
     "username": "root",
     "password": "root",
     "distances_meters": [0, 5, 10],
-    "tape_color_hsv_lower": [35, 80, 80],
+    "tape_color_hsv_lower": [35, 50, 50],
     "tape_color_hsv_upper": [85, 255, 255],
+    "hsv_tolerance": 25,
     "overlay_line_color": [255, 255, 255, 200],
     "overlay_text_color": [255, 255, 255, 255],
     "overlay_line_thickness": 3,
     "overlay_font_size": 24,
-    "min_tape_width_ratio": 0.15,
+    "min_tape_width_ratio": 0.05,
+    "min_tape_height_ratio": 0.005,
     "snapshot_timeout": 10
+}
+
+# Basic colors available for per-line overlay coloring
+LINE_COLORS = {
+    "White": (255, 255, 255, 220),
+    "Red": (255, 50, 50, 220),
+    "Green": (50, 255, 50, 220),
+    "Blue": (80, 80, 255, 220),
+    "Yellow": (255, 255, 50, 220),
+    "Cyan": (50, 255, 255, 220),
+    "Magenta": (255, 50, 255, 220),
+    "Orange": (255, 165, 0, 220),
 }
 
 
 
 def load_config():
     """Load configuration from config.json or use defaults."""
-    config_path = Path(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))) 
+    config_path = Path(getattr(sys, '_MEIPASS',
+                               os.path.dirname(os.path.abspath(__file__))))
     config_file = config_path / "config.json"
-    
-    # Also check next to the executable
+
     exe_dir = Path(os.path.dirname(os.path.abspath(sys.argv[0])))
     config_file_exe = exe_dir / "config.json"
-    
+
     config = DEFAULT_CONFIG.copy()
-    
+
     for cf in [config_file_exe, config_file]:
         if cf.exists():
             try:
@@ -65,17 +91,18 @@ def load_config():
                 break
             except (json.JSONDecodeError, IOError):
                 pass
-    
+
     return config
 
 
+
 # =============================================================================
-# AXIS VAPIX API FUNCTIONS
+# AXIS VAPIX API
 # =============================================================================
 
 class AxisEncoder:
     """Interface to Axis encoder via VAPIX API."""
-    
+
     def __init__(self, ip, username, password, timeout=10):
         self.ip = ip
         self.base_url = f"http://{ip}"
@@ -84,11 +111,10 @@ class AxisEncoder:
         self.session = requests.Session()
         self.session.auth = self.auth
 
-
     def test_connection(self):
         """Test if we can reach the encoder."""
         try:
-            resp = self.session.get(
+            resp = self.session.post(
                 f"{self.base_url}/axis-cgi/dynamicoverlay/dynamicoverlay.cgi",
                 json={"apiVersion": "1.0", "method": "getSupportedVersions"},
                 timeout=self.timeout
@@ -98,85 +124,61 @@ class AxisEncoder:
             return False
 
     def capture_snapshot(self, camera=1):
-        """Capture a JPEG snapshot from the specified camera channel."""
-        url = f"{self.base_url}/axis-cgi/jpg/image.cgi?camera={camera}"
+        """Capture a JPEG snapshot from the specified camera channel.
+        camera can be 1-4 for individual channels, or 'quad' for quad.
+        """
+        if camera == "quad":
+            url = (f"{self.base_url}/axis-cgi/jpg/image.cgi"
+                   f"?camera=1&squarepixel=1&quad=yes")
+        else:
+            url = f"{self.base_url}/axis-cgi/jpg/image.cgi?camera={camera}"
         resp = self.session.get(url, timeout=self.timeout)
         resp.raise_for_status()
         img_array = np.frombuffer(resp.content, dtype=np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         return img
 
-    def get_resolution(self, camera=1):
-        """Get the resolution of the specified camera channel."""
-        img = self.capture_snapshot(camera)
-        if img is not None:
-            h, w = img.shape[:2]
-            return w, h
-        return None, None
 
-
-    def upload_overlay_image(self, image_path, scale_to_resolution=True):
+    def upload_overlay_image(self, image_path, scale_to_resolution=False):
         """Upload a PNG overlay image to the encoder."""
         url = f"{self.base_url}/axis-cgi/uploadoverlayimage.cgi"
-        
         json_params = json.dumps({
             "apiVersion": "1.0",
             "method": "uploadOverlayImage",
-            "params": {
-                "scaleToResolution": scale_to_resolution
-            }
+            "params": {"scaleToResolution": scale_to_resolution}
         })
-        
         with open(image_path, 'rb') as img_file:
             files = {
                 'json': ('request.json', json_params, 'application/json'),
                 'image': (os.path.basename(image_path), img_file, 'image/png')
             }
             resp = self.session.post(url, files=files, timeout=self.timeout)
-        
         resp.raise_for_status()
         result = resp.json()
-        
         if 'error' in result:
             raise RuntimeError(f"Upload failed: {result['error']['message']}")
-        
         return result['data']['path']
 
     def add_image_overlay(self, camera, overlay_path, position=None):
         """Add an image overlay to a camera channel."""
         url = f"{self.base_url}/axis-cgi/dynamicoverlay/dynamicoverlay.cgi"
-        
-        params = {
-            "camera": camera,
-            "overlayPath": overlay_path
-        }
+        params = {"camera": camera, "overlayPath": overlay_path}
         if position:
             params["position"] = position
-        
-        payload = {
-            "apiVersion": "1.0",
-            "method": "addImage",
-            "params": params
-        }
-        
+        payload = {"apiVersion": "1.0", "method": "addImage", "params": params}
         resp = self.session.post(url, json=payload, timeout=self.timeout)
         resp.raise_for_status()
         result = resp.json()
-        
         if 'error' in result:
-            raise RuntimeError(f"Add overlay failed: {result['error']['message']}")
-        
+            raise RuntimeError(
+                f"Add overlay failed: {result['error']['message']}")
         return result['data']['identity']
 
 
     def list_overlays(self):
         """List all current overlays on the encoder."""
         url = f"{self.base_url}/axis-cgi/dynamicoverlay/dynamicoverlay.cgi"
-        payload = {
-            "apiVersion": "1.0",
-            "method": "list",
-            "params": {}
-        }
+        payload = {"apiVersion": "1.0", "method": "list", "params": {}}
         resp = self.session.post(url, json=payload, timeout=self.timeout)
         resp.raise_for_status()
         return resp.json()
@@ -184,11 +186,8 @@ class AxisEncoder:
     def remove_overlay(self, identity):
         """Remove an overlay by identity."""
         url = f"{self.base_url}/axis-cgi/dynamicoverlay/dynamicoverlay.cgi"
-        payload = {
-            "apiVersion": "1.0",
-            "method": "remove",
-            "params": {"identity": identity}
-        }
+        payload = {"apiVersion": "1.0", "method": "remove",
+                   "params": {"identity": identity}}
         resp = self.session.post(url, json=payload, timeout=self.timeout)
         resp.raise_for_status()
         result = resp.json()
@@ -206,70 +205,144 @@ class AxisEncoder:
                     pass
 
 
-# =============================================================================
-# GREEN TAPE DETECTION
-# =============================================================================
 
+# =============================================================================
+# TAPE DETECTION (with eyedropper support)
+# =============================================================================
 
 class TapeDetector:
-    """Detects horizontal green tape lines in an image."""
-    
+    """Detects colored tape lines in an image using HSV filtering."""
+
     def __init__(self, config):
         self.hsv_lower = np.array(config["tape_color_hsv_lower"])
         self.hsv_upper = np.array(config["tape_color_hsv_upper"])
-        self.min_width_ratio = config["min_tape_width_ratio"]
-    
+        self.min_width_ratio = config.get("min_tape_width_ratio", 0.05)
+        self.min_height_ratio = config.get("min_tape_height_ratio", 0.005)
+
+    def set_color_from_bgr(self, bgr_color, tolerance=25):
+        """Set detection color from a BGR pixel value (eyedropper)."""
+        pixel = np.uint8([[bgr_color]])
+        hsv_pixel = cv2.cvtColor(pixel, cv2.COLOR_BGR2HSV)[0][0]
+        h, s, v = int(hsv_pixel[0]), int(hsv_pixel[1]), int(hsv_pixel[2])
+        self.hsv_lower = np.array([
+            max(0, h - tolerance),
+            max(30, s - 60),
+            max(30, v - 60)
+        ])
+        self.hsv_upper = np.array([
+            min(179, h + tolerance),
+            min(255, s + 60),
+            min(255, v + 60)
+        ])
+        return self.hsv_lower.tolist(), self.hsv_upper.tolist()
+
     def detect_lines(self, image):
-        """
-        Detect horizontal green tape lines in the image.
-        
-        Returns a list of y-coordinates (center of each detected tape line),
-        sorted from top to bottom.
+        """Detect colored tape lines in the image.
+        Returns list of y-coordinates (horizontal lines) sorted top to bottom.
         """
         h, w = image.shape[:2]
-        
-        # Convert to HSV for color detection
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        
-        # Create mask for green color
         mask = cv2.inRange(hsv, self.hsv_lower, self.hsv_upper)
-        
-        # Morphological operations to clean up noise
-        kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (w // 10, 3))
-        kernel_clean = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        
-        # Close small gaps
+
+        # Clean up with morphological operations
+        kernel_clean = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_clean)
-        # Emphasize horizontal structures
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_h)
-        
-        # Find contours
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, 
-                                        cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Filter contours by width (must span significant portion of image)
+
+        # Use a smaller horizontal kernel for increased sensitivity
+        kernel_w = max(w // 20, 10)
+        kernel_h_struct = cv2.getStructuringElement(
+            cv2.MORPH_RECT, (kernel_w, 2))
+        mask_h = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_h_struct)
+
+        contours, _ = cv2.findContours(
+            mask_h, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
         min_width = w * self.min_width_ratio
         line_centers = []
-        
+
         for contour in contours:
             x, y, cw, ch = cv2.boundingRect(contour)
-            if cw >= min_width and ch < h * 0.15:  # Wide but not too tall
+            if cw >= min_width and ch < h * 0.2:
                 center_y = y + ch // 2
                 line_centers.append(center_y)
-        
-        # Sort from top to bottom
+
         line_centers.sort()
-        
-        # Merge lines that are very close together (within 2% of image height)
+
+        # Merge nearby lines
         merged = []
-        merge_threshold = h * 0.02
+        merge_threshold = h * 0.015
         for y_pos in line_centers:
             if merged and abs(y_pos - merged[-1]) < merge_threshold:
-                merged[-1] = (merged[-1] + y_pos) // 2  # Average
+                merged[-1] = (merged[-1] + y_pos) // 2
             else:
                 merged.append(y_pos)
-        
+
         return merged, mask
+
+
+
+# =============================================================================
+# LINE DATA STRUCTURE
+# =============================================================================
+
+class OverlayLine:
+    """Represents a single overlay line defined by two points."""
+
+    def __init__(self, pt1, pt2, label="A", color_name="White",
+                 extend_left=True, extend_right=True):
+        self.pt1 = pt1  # (x, y) tuple
+        self.pt2 = pt2  # (x, y) tuple
+        self.label = label
+        self.color_name = color_name
+        self.extend_left = extend_left
+        self.extend_right = extend_right
+
+    @property
+    def color_rgba(self):
+        return LINE_COLORS.get(self.color_name, LINE_COLORS["White"])
+
+    def get_extended_points(self, img_width, img_height):
+        """Calculate line endpoints extended to image edges."""
+        x1, y1 = self.pt1
+        x2, y2 = self.pt2
+        dx = x2 - x1
+        dy = y2 - y1
+
+        if dx == 0 and dy == 0:
+            return self.pt1, self.pt2
+
+        # Vertical line
+        if dx == 0:
+            top = (x1, 0) if self.extend_left else self.pt1
+            bot = (x1, img_height - 1) if self.extend_right else self.pt2
+            return top, bot
+
+        # Calculate slope
+        slope = dy / dx
+
+        # Extend left (toward x=0)
+        if self.extend_left:
+            y_at_left = int(y1 + slope * (0 - x1))
+            y_at_left = max(0, min(img_height - 1, y_at_left))
+            left_pt = (0, y_at_left)
+        else:
+            left_pt = (min(x1, x2), y1 if x1 < x2 else y2)
+
+        # Extend right (toward x=img_width-1)
+        if self.extend_right:
+            y_at_right = int(y1 + slope * (img_width - 1 - x1))
+            y_at_right = max(0, min(img_height - 1, y_at_right))
+            right_pt = (img_width - 1, y_at_right)
+        else:
+            right_pt = (max(x1, x2), y1 if x1 > x2 else y2)
+
+        return left_pt, right_pt
+
+    def is_vertical(self):
+        """Check if line is approximately vertical."""
+        dx = abs(self.pt2[0] - self.pt1[0])
+        dy = abs(self.pt2[1] - self.pt1[1])
+        return dy > dx * 3 if dx > 0 else True
 
 
 
@@ -278,62 +351,65 @@ class TapeDetector:
 # =============================================================================
 
 class OverlayGenerator:
-    """Generates transparent PNG overlay images with distance markers."""
-    
+    """Generates transparent PNG overlay images with line markers."""
+
     def __init__(self, config):
-        self.line_color = tuple(config["overlay_line_color"])
-        self.text_color = tuple(config["overlay_text_color"])
         self.line_thickness = config["overlay_line_thickness"]
         self.font_size = config["overlay_font_size"]
-    
-    def generate_overlay(self, width, height, line_positions, distances):
-        """
-        Generate a transparent PNG overlay image.
-        
+        self.text_color = tuple(config["overlay_text_color"])
+
+    def generate_overlay(self, width, height, lines):
+        """Generate a transparent PNG overlay from OverlayLine objects.
+
         Args:
             width: Image width in pixels
             height: Image height in pixels
-            line_positions: List of y-coordinates for the lines
-            distances: List of distance labels (matching line_positions)
-        
+            lines: List of OverlayLine objects
+
         Returns:
             PIL Image object (RGBA)
         """
-        # Create transparent image
         overlay = Image.new('RGBA', (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
-        
-        # Try to load a reasonable font
         font = self._get_font()
-        
-        for y_pos, distance in zip(line_positions, distances):
-            # Draw horizontal line spanning full width
-            for t in range(self.line_thickness):
-                y = y_pos + t - self.line_thickness // 2
-                if 0 <= y < height:
-                    draw.line([(0, y), (width - 1, y)], fill=self.line_color)
-            
-            # Draw distance label
-            label = f"{distance}m"
-            # Position text to the right side with some padding
+
+        for line in lines:
+            color = line.color_rgba
+            pt_a, pt_b = line.get_extended_points(width, height)
+
+            # Draw the line with thickness
+            draw.line([pt_a, pt_b], fill=color, width=self.line_thickness)
+
+            # Draw label near the midpoint
+            mid_x = (pt_a[0] + pt_b[0]) // 2
+            mid_y = (pt_a[1] + pt_b[1]) // 2
+
+            label = line.label
             text_bbox = draw.textbbox((0, 0), label, font=font)
             text_w = text_bbox[2] - text_bbox[0]
             text_h = text_bbox[3] - text_bbox[1]
-            
-            text_x = width - text_w - 20  # 20px padding from right
-            text_y = y_pos - text_h - 5   # Just above the line
-            
-            # Draw text background for readability
-            bg_padding = 4
+
+            # Position label above/beside line
+            if line.is_vertical():
+                text_x = mid_x + 8
+                text_y = mid_y - text_h // 2
+            else:
+                text_x = width - text_w - 15
+                text_y = mid_y - text_h - 6
+
+            # Clamp to image bounds
+            text_x = max(2, min(width - text_w - 2, text_x))
+            text_y = max(2, min(height - text_h - 2, text_y))
+
+            # Background box for readability
+            bg_pad = 3
             draw.rectangle(
-                [text_x - bg_padding, text_y - bg_padding,
-                 text_x + text_w + bg_padding, text_y + text_h + bg_padding],
-                fill=(0, 0, 0, 150)
+                [text_x - bg_pad, text_y - bg_pad,
+                 text_x + text_w + bg_pad, text_y + text_h + bg_pad],
+                fill=(0, 0, 0, 160)
             )
-            
-            # Draw text
             draw.text((text_x, text_y), label, fill=self.text_color, font=font)
-        
+
         return overlay
 
 
@@ -345,15 +421,12 @@ class OverlayGenerator:
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/TTF/DejaVuSans.ttf",
         ]
-        
         for fp in font_paths:
             if os.path.exists(fp):
                 try:
                     return ImageFont.truetype(fp, self.font_size)
                 except (IOError, OSError):
                     continue
-        
-        # Fallback to default font
         try:
             return ImageFont.truetype("arial.ttf", self.font_size)
         except (IOError, OSError):
@@ -365,429 +438,605 @@ class OverlayGenerator:
         return filepath
 
 
+
 # =============================================================================
 # GUI APPLICATION
 # =============================================================================
 
 class DistanceOverlayApp:
     """Main GUI application for the distance overlay tool."""
-    
+
     def __init__(self):
         self.config = load_config()
         self.encoder = None
         self.detector = TapeDetector(self.config)
         self.generator = OverlayGenerator(self.config)
         self.current_snapshot = None
-        self.detected_lines = []
-        self.manual_lines = []
-        
+
+        # Line management
+        self.lines = []  # List of OverlayLine objects
+        self.next_label_idx = 0
+
+        # Click mode state
+        self.click_mode = "line"  # "line", "eyedropper"
+        self.pending_point = None  # First point of a two-point line
+
+        # Display state
+        self.display_scale = 1.0
+        self.photo_image = None
+        self.img_offset_x = 0
+        self.img_offset_y = 0
+
         self._build_gui()
 
 
     def _build_gui(self):
         """Build the main application window."""
         self.root = tk.Tk()
-        self.root.title("Axis Distance Overlay Tool")
-        self.root.geometry("1000x750")
+        self.root.title("Axis Distance Overlay Tool v2.0")
+        self.root.geometry("1100x820")
         self.root.resizable(True, True)
-        
-        # Main frame
+
         main_frame = ttk.Frame(self.root, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
-        
+
         # --- Connection Frame ---
-        conn_frame = ttk.LabelFrame(main_frame, text="Encoder Connection", padding=10)
-        conn_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # IP Selection
-        ttk.Label(conn_frame, text="Encoder IP:").grid(row=0, column=0, sticky=tk.W)
+        conn_frame = ttk.LabelFrame(main_frame, text="Encoder Connection",
+                                     padding=10)
+        conn_frame.pack(fill=tk.X, pady=(0, 8))
+
+        ttk.Label(conn_frame, text="Encoder IP:").grid(
+            row=0, column=0, sticky=tk.W)
         self.ip_var = tk.StringVar()
         ip_options = self.config["encoder_ips"] + ["Custom..."]
-        self.ip_combo = ttk.Combobox(conn_frame, textvariable=self.ip_var, 
-                                      values=ip_options, width=20)
+        self.ip_combo = ttk.Combobox(conn_frame, textvariable=self.ip_var,
+                                      values=ip_options, width=18)
         self.ip_combo.grid(row=0, column=1, padx=5)
         self.ip_combo.set(self.config["encoder_ips"][0])
         self.ip_combo.bind("<<ComboboxSelected>>", self._on_ip_selected)
-        
-        # Custom IP entry
+
         self.custom_ip_var = tk.StringVar()
-        self.custom_ip_entry = ttk.Entry(conn_frame, textvariable=self.custom_ip_var, 
-                                          width=20)
+        self.custom_ip_entry = ttk.Entry(conn_frame,
+                                          textvariable=self.custom_ip_var,
+                                          width=18)
         self.custom_ip_entry.grid(row=0, column=2, padx=5)
-        self.custom_ip_entry.grid_remove()  # Hidden by default
-        
-        # Camera channel
-        ttk.Label(conn_frame, text="Camera:").grid(row=0, column=3, padx=(20, 0))
-        self.camera_var = tk.IntVar(value=1)
-        camera_spin = ttk.Spinbox(conn_frame, from_=1, to=4, width=5,
-                                   textvariable=self.camera_var)
-        camera_spin.grid(row=0, column=4, padx=5)
-        
-        # Connect button
+        self.custom_ip_entry.grid_remove()
+
+        # Camera channel (1-4 + Quad)
+        ttk.Label(conn_frame, text="Camera:").grid(
+            row=0, column=3, padx=(15, 0))
+        self.camera_var = tk.StringVar(value="1")
+        camera_combo = ttk.Combobox(
+            conn_frame, textvariable=self.camera_var,
+            values=["1", "2", "3", "4", "Quad"], width=6, state="readonly")
+        camera_combo.grid(row=0, column=4, padx=5)
+
         self.connect_btn = ttk.Button(conn_frame, text="Connect & Capture",
                                        command=self._connect_and_capture)
-        self.connect_btn.grid(row=0, column=5, padx=20)
+        self.connect_btn.grid(row=0, column=5, padx=15)
 
 
         # --- Image Display Frame ---
-        img_frame = ttk.LabelFrame(main_frame, text="Snapshot & Detection", padding=5)
-        img_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-        
-        # Canvas for image display
+        img_frame = ttk.LabelFrame(main_frame, text="Snapshot & Lines",
+                                    padding=5)
+        img_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+
         self.canvas = tk.Canvas(img_frame, bg='gray20', cursor='crosshair')
         self.canvas.pack(fill=tk.BOTH, expand=True)
         self.canvas.bind("<Button-1>", self._on_canvas_click)
-        
-        # --- Controls Frame ---
-        ctrl_frame = ttk.LabelFrame(main_frame, text="Controls", padding=10)
-        ctrl_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Detection controls
-        ttk.Button(ctrl_frame, text="Auto-Detect Lines",
-                   command=self._auto_detect).grid(row=0, column=0, padx=5)
-        ttk.Button(ctrl_frame, text="Clear Lines",
-                   command=self._clear_lines).grid(row=0, column=1, padx=5)
-        
-        ttk.Separator(ctrl_frame, orient=tk.VERTICAL).grid(
-            row=0, column=2, sticky='ns', padx=15)
-        
-        # Manual mode hint
-        ttk.Label(ctrl_frame, text="Manual: Click image to add lines",
-                  foreground='gray').grid(row=0, column=3, padx=5)
-        
-        ttk.Separator(ctrl_frame, orient=tk.VERTICAL).grid(
-            row=0, column=4, sticky='ns', padx=15)
-        
-        # Apply overlay
-        self.apply_btn = ttk.Button(ctrl_frame, text="Generate & Apply Overlay",
-                                     command=self._apply_overlay)
-        self.apply_btn.grid(row=0, column=5, padx=5)
-        
-        # Remove existing overlays
-        ttk.Button(ctrl_frame, text="Remove All Overlays",
-                   command=self._remove_overlays).grid(row=0, column=6, padx=5)
+
+        # --- Tools Frame ---
+        tools_frame = ttk.LabelFrame(main_frame, text="Tools", padding=8)
+        tools_frame.pack(fill=tk.X, pady=(0, 8))
+
+        # Click mode selector
+        ttk.Label(tools_frame, text="Click Mode:").grid(
+            row=0, column=0, padx=(0, 5))
+
+        self.mode_var = tk.StringVar(value="line")
+        ttk.Radiobutton(tools_frame, text="Add Line (2 clicks)",
+                        variable=self.mode_var, value="line").grid(
+                            row=0, column=1, padx=5)
+        ttk.Radiobutton(tools_frame, text="Eyedropper (pick color)",
+                        variable=self.mode_var, value="eyedropper").grid(
+                            row=0, column=2, padx=5)
+
+        ttk.Separator(tools_frame, orient=tk.VERTICAL).grid(
+            row=0, column=3, sticky='ns', padx=12)
+
+        # Auto-detect
+        ttk.Button(tools_frame, text="Auto-Detect Lines",
+                   command=self._auto_detect).grid(row=0, column=4, padx=5)
+
+        # Sensitivity slider
+        ttk.Label(tools_frame, text="Sensitivity:").grid(
+            row=0, column=5, padx=(10, 2))
+        self.sensitivity_var = tk.IntVar(value=50)
+        sens_scale = ttk.Scale(tools_frame, from_=10, to=100,
+                               variable=self.sensitivity_var,
+                               orient=tk.HORIZONTAL, length=100)
+        sens_scale.grid(row=0, column=6, padx=5)
+
+        ttk.Separator(tools_frame, orient=tk.VERTICAL).grid(
+            row=0, column=7, sticky='ns', padx=12)
+
+        ttk.Button(tools_frame, text="Clear All Lines",
+                   command=self._clear_lines).grid(row=0, column=8, padx=5)
+
+        ttk.Separator(tools_frame, orient=tk.VERTICAL).grid(
+            row=0, column=9, sticky='ns', padx=12)
+
+        ttk.Button(tools_frame, text="Generate & Apply Overlay",
+                   command=self._apply_overlay).grid(row=0, column=10, padx=5)
+        ttk.Button(tools_frame, text="Remove All Overlays",
+                   command=self._remove_overlays).grid(row=0, column=11, padx=5)
 
 
-        # --- Distance Assignment Frame ---
-        dist_frame = ttk.LabelFrame(main_frame, text="Distance Assignment", padding=10)
-        dist_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(dist_frame, 
-                  text="Assign distances to detected lines (top to bottom):").pack(
-                      anchor=tk.W)
-        
-        self.dist_list_frame = ttk.Frame(dist_frame)
-        self.dist_list_frame.pack(fill=tk.X, pady=5)
-        
-        self.distance_entries = []
-        
+        # --- Eyedropper status ---
+        self.eyedropper_frame = ttk.Frame(tools_frame)
+        self.eyedropper_frame.grid(row=1, column=0, columnspan=12,
+                                    sticky=tk.W, pady=(5, 0))
+        self.eyedropper_label = ttk.Label(
+            self.eyedropper_frame,
+            text="Eyedropper: Click on tape in image to set detection color")
+        self.eyedropper_label.pack(side=tk.LEFT)
+
+        self.color_sample = tk.Label(self.eyedropper_frame, text="  ",
+                                      bg="#00AA00", width=4)
+        self.color_sample.pack(side=tk.LEFT, padx=10)
+
+        ttk.Label(self.eyedropper_frame, text="HSV Tolerance:").pack(
+            side=tk.LEFT, padx=(10, 2))
+        self.tolerance_var = tk.IntVar(
+            value=self.config.get("hsv_tolerance", 25))
+        ttk.Spinbox(self.eyedropper_frame, from_=5, to=60, width=4,
+                    textvariable=self.tolerance_var).pack(side=tk.LEFT)
+
+        # --- Line List Frame ---
+        line_frame = ttk.LabelFrame(main_frame, text="Lines (alphabetical)",
+                                     padding=8)
+        line_frame.pack(fill=tk.X, pady=(0, 8))
+
+        # Scrollable line list
+        self.line_list_frame = ttk.Frame(line_frame)
+        self.line_list_frame.pack(fill=tk.X)
+
         # --- Status Bar ---
-        self.status_var = tk.StringVar(value="Ready. Select encoder IP and click Connect.")
-        status_bar = ttk.Label(main_frame, textvariable=self.status_var, 
+        self.status_var = tk.StringVar(
+            value="Ready. Select encoder IP and click Connect & Capture.")
+        status_bar = ttk.Label(main_frame, textvariable=self.status_var,
                                relief=tk.SUNKEN, padding=5)
         status_bar.pack(fill=tk.X)
-        
-        # Image display state
-        self.display_image = None
-        self.display_scale = 1.0
-        self.photo_image = None
+
+
+    # =========================================================================
+    # CONNECTION & CAPTURE
+    # =========================================================================
 
     def _on_ip_selected(self, event=None):
-        """Handle IP combobox selection."""
         if self.ip_var.get() == "Custom...":
             self.custom_ip_entry.grid()
         else:
             self.custom_ip_entry.grid_remove()
 
     def _get_selected_ip(self):
-        """Get the currently selected IP address."""
         if self.ip_var.get() == "Custom...":
             ip = self.custom_ip_var.get().strip()
             if not ip:
-                messagebox.showerror("Error", "Please enter a custom IP address.")
+                messagebox.showerror("Error",
+                                     "Please enter a custom IP address.")
                 return None
             return ip
         return self.ip_var.get()
 
+    def _get_camera_value(self):
+        """Get camera value - int for 1-4, 'quad' for Quad."""
+        val = self.camera_var.get()
+        if val.lower() == "quad":
+            return "quad"
+        return int(val)
 
     def _connect_and_capture(self):
         """Connect to encoder and capture a snapshot."""
         ip = self._get_selected_ip()
         if not ip:
             return
-        
-        camera = self.camera_var.get()
-        self.status_var.set(f"Connecting to {ip}, camera {camera}...")
+
+        camera = self._get_camera_value()
+        camera_display = "Quad" if camera == "quad" else f"{camera}"
+        self.status_var.set(
+            f"Connecting to {ip}, camera {camera_display}...")
         self.root.update()
-        
+
         try:
             self.encoder = AxisEncoder(
-                ip, 
-                self.config["username"], 
-                self.config["password"],
-                timeout=self.config["snapshot_timeout"]
-            )
-            
-            # Test connection
+                ip, self.config["username"], self.config["password"],
+                timeout=self.config["snapshot_timeout"])
+
             if not self.encoder.test_connection():
                 messagebox.showerror("Connection Failed",
                     f"Cannot connect to encoder at {ip}.\n"
-                    "Check IP address, network connection, and credentials.")
+                    "Check IP address, network, and credentials.")
                 self.status_var.set("Connection failed.")
                 return
-            
-            # Capture snapshot
+
             self.current_snapshot = self.encoder.capture_snapshot(camera)
             if self.current_snapshot is None:
                 messagebox.showerror("Error", "Failed to capture snapshot.")
                 self.status_var.set("Snapshot capture failed.")
                 return
-            
+
             h, w = self.current_snapshot.shape[:2]
             self.status_var.set(
-                f"Connected to {ip} | Camera {camera} | "
-                f"Resolution: {w}x{h} | Click Auto-Detect or click image manually")
-            
+                f"Connected to {ip} | Camera {camera_display} | "
+                f"{w}x{h} | Use tools to add lines")
             self._display_snapshot()
             self._clear_lines()
-            
+
         except requests.exceptions.RequestException as e:
-            messagebox.showerror("Connection Error", f"Network error: {str(e)}")
+            messagebox.showerror("Connection Error",
+                                 f"Network error: {str(e)}")
             self.status_var.set("Connection error.")
 
 
-    def _display_snapshot(self, lines=None):
-        """Display the current snapshot on the canvas with optional line overlays."""
+    # =========================================================================
+    # DISPLAY
+    # =========================================================================
+
+    def _display_snapshot(self):
+        """Display the current snapshot with all lines drawn."""
         if self.current_snapshot is None:
             return
-        
-        # Convert BGR to RGB
+
         img_rgb = cv2.cvtColor(self.current_snapshot, cv2.COLOR_BGR2RGB)
-        
-        # Draw detected lines on the display
-        if lines:
-            for y_pos in lines:
-                cv2.line(img_rgb, (0, y_pos), (img_rgb.shape[1] - 1, y_pos),
-                         (255, 50, 50), 2)
-                # Draw small label
-                cv2.putText(img_rgb, f"y={y_pos}", (10, y_pos - 5),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 50, 50), 1)
-        
+        h, w = img_rgb.shape[:2]
+
+        # Draw all lines on preview
+        for line in self.lines:
+            pt_a, pt_b = line.get_extended_points(w, h)
+            # Convert RGBA to RGB for cv2
+            color_rgb = line.color_rgba[:3]
+            cv2.line(img_rgb, pt_a, pt_b, color_rgb, 2)
+            # Label
+            mid_x = (pt_a[0] + pt_b[0]) // 2
+            mid_y = (pt_a[1] + pt_b[1]) // 2
+            cv2.putText(img_rgb, line.label, (mid_x + 5, mid_y - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color_rgb, 2)
+
+        # Draw pending point (first click of two-point line)
+        if self.pending_point:
+            px, py = self.pending_point
+            cv2.circle(img_rgb, (px, py), 6, (255, 255, 0), 2)
+            cv2.putText(img_rgb, "Click 2nd point", (px + 10, py - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+
         # Scale to fit canvas
         canvas_w = self.canvas.winfo_width()
         canvas_h = self.canvas.winfo_height()
-        
         if canvas_w < 10 or canvas_h < 10:
-            canvas_w = 900
-            canvas_h = 500
-        
-        img_h, img_w = img_rgb.shape[:2]
-        scale_w = canvas_w / img_w
-        scale_h = canvas_h / img_h
+            canvas_w, canvas_h = 950, 450
+
+        scale_w = canvas_w / w
+        scale_h = canvas_h / h
         self.display_scale = min(scale_w, scale_h)
-        
-        new_w = int(img_w * self.display_scale)
-        new_h = int(img_h * self.display_scale)
-        
+
+        new_w = int(w * self.display_scale)
+        new_h = int(h * self.display_scale)
         img_resized = cv2.resize(img_rgb, (new_w, new_h))
-        
-        # Convert to PhotoImage
+
         pil_img = Image.fromarray(img_resized)
         self.photo_image = ImageTk.PhotoImage(pil_img)
-        
-        # Display on canvas
+
         self.canvas.delete("all")
-        self.canvas.create_image(canvas_w // 2, canvas_h // 2, 
+        self.canvas.create_image(canvas_w // 2, canvas_h // 2,
                                   image=self.photo_image, anchor=tk.CENTER)
-        
-        # Store offset for click coordinate mapping
         self.img_offset_x = (canvas_w - new_w) // 2
         self.img_offset_y = (canvas_h - new_h) // 2
 
 
-    def _on_canvas_click(self, event):
-        """Handle manual line placement by clicking on the image."""
-        if self.current_snapshot is None:
-            return
-        
-        # Convert canvas click to image coordinates
+    # =========================================================================
+    # CANVAS CLICK HANDLING
+    # =========================================================================
+
+    def _canvas_to_image_coords(self, event):
+        """Convert canvas click coordinates to image pixel coordinates."""
         img_x = event.x - self.img_offset_x
         img_y = event.y - self.img_offset_y
-        
-        # Convert from display scale to actual image coordinates
+        actual_x = int(img_x / self.display_scale)
         actual_y = int(img_y / self.display_scale)
-        
-        h = self.current_snapshot.shape[0]
-        if actual_y < 0 or actual_y >= h:
-            return
-        
-        self.manual_lines.append(actual_y)
-        self.manual_lines.sort()
-        
-        # Update display
-        all_lines = sorted(set(self.detected_lines + self.manual_lines))
-        self._display_snapshot(lines=all_lines)
-        self._update_distance_entries(all_lines)
-        self.status_var.set(
-            f"Manual line added at y={actual_y} | "
-            f"Total lines: {len(all_lines)}")
+        return actual_x, actual_y
 
-    def _auto_detect(self):
-        """Run automatic green tape detection."""
+    def _on_canvas_click(self, event):
+        """Handle canvas click based on current mode."""
         if self.current_snapshot is None:
-            messagebox.showwarning("No Image", 
-                                    "Capture a snapshot first.")
             return
-        
-        self.status_var.set("Detecting green tape lines...")
-        self.root.update()
-        
-        lines, mask = self.detector.detect_lines(self.current_snapshot)
-        
-        if not lines:
-            messagebox.showinfo("No Lines Detected",
-                "No green tape lines were detected.\n\n"
-                "Try:\n"
-                "- Ensuring tape is visible and well-lit\n"
-                "- Adjusting HSV color range in config.json\n"
-                "- Using manual mode (click on image)")
-            self.status_var.set("Auto-detection found no lines. Use manual mode.")
-            return
-        
-        self.detected_lines = lines
-        all_lines = sorted(set(self.detected_lines + self.manual_lines))
-        
-        self._display_snapshot(lines=all_lines)
-        self._update_distance_entries(all_lines)
-        self.status_var.set(
-            f"Auto-detected {len(lines)} line(s). "
-            f"Assign distances below, then click 'Generate & Apply'.")
 
+        actual_x, actual_y = self._canvas_to_image_coords(event)
+        h, w = self.current_snapshot.shape[:2]
+
+        # Bounds check
+        if actual_x < 0 or actual_x >= w or actual_y < 0 or actual_y >= h:
+            return
+
+        mode = self.mode_var.get()
+
+        if mode == "eyedropper":
+            self._do_eyedropper(actual_x, actual_y)
+        elif mode == "line":
+            self._do_line_click(actual_x, actual_y)
+
+    def _do_eyedropper(self, x, y):
+        """Sample color at (x, y) and set as detection color."""
+        bgr = self.current_snapshot[y, x].tolist()
+        tolerance = self.tolerance_var.get()
+        lower, upper = self.detector.set_color_from_bgr(bgr, tolerance)
+
+        # Update color sample display
+        r, g, b = bgr[2], bgr[1], bgr[0]
+        hex_color = f"#{r:02x}{g:02x}{b:02x}"
+        self.color_sample.configure(bg=hex_color)
+
+        self.eyedropper_label.config(
+            text=f"Eyedropper: Sampled BGR=({bgr[0]},{bgr[1]},{bgr[2]}) "
+                 f"| HSV range: {lower} - {upper}")
+        self.status_var.set(
+            f"Color sampled at ({x},{y}). Now click Auto-Detect or "
+            f"switch to Line mode.")
+
+    def _do_line_click(self, x, y):
+        """Handle two-point line placement."""
+        if self.pending_point is None:
+            # First click
+            self.pending_point = (x, y)
+            self.status_var.set(
+                f"First point at ({x},{y}). Click second point to "
+                f"complete line.")
+            self._display_snapshot()
+        else:
+            # Second click - create the line
+            pt1 = self.pending_point
+            pt2 = (x, y)
+            self.pending_point = None
+
+            label = self._get_next_label()
+            line = OverlayLine(pt1, pt2, label=label,
+                               color_name="White",
+                               extend_left=True, extend_right=True)
+            self.lines.append(line)
+
+            self._display_snapshot()
+            self._update_line_list()
+            self.status_var.set(
+                f"Line {label} added: ({pt1[0]},{pt1[1]}) -> "
+                f"({pt2[0]},{pt2[1]})")
+
+
+    # =========================================================================
+    # LINE MANAGEMENT
+    # =========================================================================
+
+    def _get_next_label(self):
+        """Get next alphabetical label (A, B, C... Z, AA, AB...)."""
+        idx = self.next_label_idx
+        self.next_label_idx += 1
+        if idx < 26:
+            return string.ascii_uppercase[idx]
+        else:
+            first = string.ascii_uppercase[(idx // 26) - 1]
+            second = string.ascii_uppercase[idx % 26]
+            return first + second
 
     def _clear_lines(self):
-        """Clear all detected and manual lines."""
-        self.detected_lines = []
-        self.manual_lines = []
+        """Clear all lines."""
+        self.lines = []
+        self.next_label_idx = 0
+        self.pending_point = None
         self._display_snapshot()
-        self._update_distance_entries([])
-        self.status_var.set("Lines cleared.")
+        self._update_line_list()
+        self.status_var.set("All lines cleared.")
 
-    def _update_distance_entries(self, lines):
-        """Update the distance entry widgets to match detected lines."""
-        # Clear existing entries
-        for widget in self.dist_list_frame.winfo_children():
-            widget.destroy()
-        self.distance_entries = []
-        
-        if not lines:
-            ttk.Label(self.dist_list_frame, 
-                      text="No lines detected yet.").pack(anchor=tk.W)
+    def _auto_detect(self):
+        """Run automatic tape detection."""
+        if self.current_snapshot is None:
+            messagebox.showwarning("No Image", "Capture a snapshot first.")
             return
-        
-        # Default distances from config
-        default_distances = self.config["distances_meters"]
-        
-        for i, y_pos in enumerate(lines):
-            frame = ttk.Frame(self.dist_list_frame)
-            frame.pack(fill=tk.X, pady=2)
-            
-            ttk.Label(frame, text=f"Line {i+1} (y={y_pos}):").pack(
-                side=tk.LEFT, padx=(0, 10))
-            
-            dist_var = tk.StringVar()
-            if i < len(default_distances):
-                dist_var.set(str(default_distances[i]))
+
+        # Adjust sensitivity: lower ratio = more sensitive
+        sensitivity = self.sensitivity_var.get()
+        self.detector.min_width_ratio = max(0.02, (100 - sensitivity) / 1000.0)
+
+        self.status_var.set("Detecting tape lines...")
+        self.root.update()
+
+        lines_y, mask = self.detector.detect_lines(self.current_snapshot)
+
+        if not lines_y:
+            messagebox.showinfo("No Lines Detected",
+                "No tape lines were detected.\n\n"
+                "Try:\n"
+                "- Use Eyedropper to sample the tape color\n"
+                "- Increase sensitivity slider\n"
+                "- Increase HSV tolerance\n"
+                "- Use manual two-point line mode")
+            self.status_var.set("No lines detected. Try eyedropper or manual.")
+            return
+
+        # Convert detected y-positions to full-width horizontal lines
+        h, w = self.current_snapshot.shape[:2]
+        for y_pos in lines_y:
+            label = self._get_next_label()
+            line = OverlayLine((0, y_pos), (w - 1, y_pos),
+                               label=label, color_name="White",
+                               extend_left=True, extend_right=True)
+            self.lines.append(line)
+
+        self._display_snapshot()
+        self._update_line_list()
+        self.status_var.set(
+            f"Auto-detected {len(lines_y)} line(s). "
+            f"Adjust colors/labels below.")
+
+
+    def _update_line_list(self):
+        """Rebuild the line list UI with per-line controls."""
+        for widget in self.line_list_frame.winfo_children():
+            widget.destroy()
+
+        if not self.lines:
+            ttk.Label(self.line_list_frame,
+                      text="No lines yet. Use Auto-Detect or click "
+                           "two points on the image.").pack(anchor=tk.W)
+            return
+
+        # Header row
+        hdr = ttk.Frame(self.line_list_frame)
+        hdr.pack(fill=tk.X, pady=(0, 3))
+        ttk.Label(hdr, text="Label", width=6, font=('', 8, 'bold')).pack(
+            side=tk.LEFT)
+        ttk.Label(hdr, text="Points", width=28, font=('', 8, 'bold')).pack(
+            side=tk.LEFT)
+        ttk.Label(hdr, text="Color", width=10, font=('', 8, 'bold')).pack(
+            side=tk.LEFT)
+        ttk.Label(hdr, text="Extend", width=12, font=('', 8, 'bold')).pack(
+            side=tk.LEFT)
+
+        for i, line in enumerate(self.lines):
+            row = ttk.Frame(self.line_list_frame)
+            row.pack(fill=tk.X, pady=1)
+
+            # Label (editable)
+            label_var = tk.StringVar(value=line.label)
+            label_entry = ttk.Entry(row, textvariable=label_var, width=5)
+            label_entry.pack(side=tk.LEFT, padx=(0, 5))
+            label_entry.bind("<FocusOut>",
+                             lambda e, idx=i, v=label_var:
+                                 self._update_line_label(idx, v.get()))
+
+            # Points display
+            pts_text = (f"({line.pt1[0]},{line.pt1[1]}) -> "
+                        f"({line.pt2[0]},{line.pt2[1]})")
+            ttk.Label(row, text=pts_text, width=28).pack(side=tk.LEFT)
+
+            # Color dropdown
+            color_var = tk.StringVar(value=line.color_name)
+            color_combo = ttk.Combobox(
+                row, textvariable=color_var,
+                values=list(LINE_COLORS.keys()), width=8, state="readonly")
+            color_combo.pack(side=tk.LEFT, padx=5)
+            color_combo.bind("<<ComboboxSelected>>",
+                             lambda e, idx=i, v=color_var:
+                                 self._update_line_color(idx, v.get()))
+
+            # Extend checkboxes
+            ext_frame = ttk.Frame(row)
+            ext_frame.pack(side=tk.LEFT, padx=5)
+
+            ext_l_var = tk.BooleanVar(value=line.extend_left)
+            ttk.Checkbutton(ext_frame, text="L", variable=ext_l_var,
+                            command=lambda idx=i, v=ext_l_var:
+                                self._update_extend(idx, 'left', v.get())
+                            ).pack(side=tk.LEFT)
+
+            ext_r_var = tk.BooleanVar(value=line.extend_right)
+            ttk.Checkbutton(ext_frame, text="R", variable=ext_r_var,
+                            command=lambda idx=i, v=ext_r_var:
+                                self._update_extend(idx, 'right', v.get())
+                            ).pack(side=tk.LEFT)
+
+            # Delete button
+            ttk.Button(row, text="X", width=3,
+                       command=lambda idx=i: self._remove_line(idx)).pack(
+                           side=tk.LEFT, padx=10)
+
+
+    def _update_line_label(self, idx, new_label):
+        """Update label for a line."""
+        if idx < len(self.lines) and new_label.strip():
+            self.lines[idx].label = new_label.strip()
+            self._display_snapshot()
+
+    def _update_line_color(self, idx, color_name):
+        """Update color for a line."""
+        if idx < len(self.lines):
+            self.lines[idx].color_name = color_name
+            self._display_snapshot()
+
+    def _update_extend(self, idx, side, value):
+        """Update extend setting for a line."""
+        if idx < len(self.lines):
+            if side == 'left':
+                self.lines[idx].extend_left = value
             else:
-                dist_var.set(str(i * 5))
-            
-            entry = ttk.Entry(frame, textvariable=dist_var, width=8)
-            entry.pack(side=tk.LEFT)
-            ttk.Label(frame, text="meters").pack(side=tk.LEFT, padx=5)
-            
-            # Delete button for this line
-            del_btn = ttk.Button(frame, text="X", width=3,
-                                  command=lambda idx=i: self._remove_line(idx))
-            del_btn.pack(side=tk.LEFT, padx=10)
-            
-            self.distance_entries.append((y_pos, dist_var))
+                self.lines[idx].extend_right = value
+            self._display_snapshot()
+
+    def _remove_line(self, idx):
+        """Remove a specific line."""
+        if idx < len(self.lines):
+            self.lines.pop(idx)
+            self._display_snapshot()
+            self._update_line_list()
 
 
-    def _remove_line(self, index):
-        """Remove a specific line by index."""
-        all_lines = sorted(set(self.detected_lines + self.manual_lines))
-        if index < len(all_lines):
-            y_to_remove = all_lines[index]
-            if y_to_remove in self.detected_lines:
-                self.detected_lines.remove(y_to_remove)
-            if y_to_remove in self.manual_lines:
-                self.manual_lines.remove(y_to_remove)
-        
-        all_lines = sorted(set(self.detected_lines + self.manual_lines))
-        self._display_snapshot(lines=all_lines)
-        self._update_distance_entries(all_lines)
+    # =========================================================================
+    # OVERLAY GENERATION & UPLOAD
+    # =========================================================================
 
     def _apply_overlay(self):
         """Generate overlay image and upload to encoder."""
         if self.encoder is None:
             messagebox.showerror("Error", "Not connected to encoder.")
             return
-        
-        if not self.distance_entries:
-            messagebox.showerror("Error", "No lines defined. Detect or add lines first.")
+
+        if not self.lines:
+            messagebox.showerror("Error",
+                                 "No lines defined. Add lines first.")
             return
-        
-        # Gather line positions and distances
-        line_positions = []
-        distances = []
-        
-        for y_pos, dist_var in self.distance_entries:
-            try:
-                dist_val = float(dist_var.get())
-            except ValueError:
-                messagebox.showerror("Error", 
-                    f"Invalid distance value: '{dist_var.get()}'")
-                return
-            line_positions.append(y_pos)
-            distances.append(dist_val)
-        
-        camera = self.camera_var.get()
+
+        camera = self._get_camera_value()
         h, w = self.current_snapshot.shape[:2]
-        
+
         self.status_var.set("Generating overlay image...")
         self.root.update()
-        
+
         try:
-            # Generate overlay
-            overlay_img = self.generator.generate_overlay(
-                w, h, line_positions, distances)
-            
-            # Save to temp file
+            overlay_img = self.generator.generate_overlay(w, h, self.lines)
+
             temp_dir = Path(os.path.dirname(os.path.abspath(sys.argv[0])))
-            overlay_path = temp_dir / f"overlay_camera{camera}.png"
+            cam_label = "quad" if camera == "quad" else str(camera)
+            overlay_path = temp_dir / f"overlay_camera{cam_label}.png"
             self.generator.save_overlay(overlay_img, str(overlay_path))
-            
+
             self.status_var.set("Uploading overlay to encoder...")
             self.root.update()
-            
-            # Upload to encoder
+
             ovl_path = self.encoder.upload_overlay_image(
                 str(overlay_path), scale_to_resolution=False)
-            
-            # Apply overlay to camera channel
-            identity = self.encoder.add_image_overlay(camera, ovl_path)
-            
-            self.status_var.set(
-                f"Overlay applied successfully! Camera {camera}, "
-                f"ID: {identity}, Path: {ovl_path}")
-            
-            messagebox.showinfo("Success",
-                f"Distance overlay applied to camera {camera}!\n\n"
-                f"Overlay ID: {identity}\n"
-                f"Lines: {len(line_positions)}\n"
-                f"Distances: {[f'{d}m' for d in distances]}")
-            
+
+            # For quad, apply to all 4 channels
+            if camera == "quad":
+                identities = []
+                for ch in range(1, 5):
+                    identity = self.encoder.add_image_overlay(ch, ovl_path)
+                    identities.append(identity)
+                self.status_var.set(
+                    f"Overlay applied to all 4 channels! IDs: {identities}")
+                messagebox.showinfo("Success",
+                    f"Distance overlay applied to Quad (all channels)!\n\n"
+                    f"Overlay IDs: {identities}\n"
+                    f"Lines: {len(self.lines)}")
+            else:
+                identity = self.encoder.add_image_overlay(camera, ovl_path)
+                self.status_var.set(
+                    f"Overlay applied! Camera {camera}, ID: {identity}")
+                messagebox.showinfo("Success",
+                    f"Overlay applied to camera {camera}!\n\n"
+                    f"Overlay ID: {identity}\n"
+                    f"Lines: {len(self.lines)}")
+
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to apply overlay:\n{str(e)}")
+            messagebox.showerror("Error",
+                                 f"Failed to apply overlay:\n{str(e)}")
             self.status_var.set(f"Error: {str(e)}")
 
 
@@ -796,17 +1045,19 @@ class DistanceOverlayApp:
         if self.encoder is None:
             messagebox.showerror("Error", "Not connected to encoder.")
             return
-        
-        if not messagebox.askyesno("Confirm", 
+
+        if not messagebox.askyesno("Confirm",
                 "Remove ALL image overlays from this encoder?"):
             return
-        
+
         try:
             self.encoder.remove_all_image_overlays()
             self.status_var.set("All image overlays removed.")
-            messagebox.showinfo("Done", "All image overlays have been removed.")
+            messagebox.showinfo("Done",
+                                "All image overlays have been removed.")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to remove overlays:\n{str(e)}")
+            messagebox.showerror("Error",
+                                 f"Failed to remove overlays:\n{str(e)}")
 
     def run(self):
         """Start the application main loop."""
