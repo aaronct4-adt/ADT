@@ -125,9 +125,23 @@ class AxisEncoder:
 
     def capture_snapshot(self, camera=1):
         """Capture a JPEG snapshot from the specified camera channel.
-        camera can be 1-4 for individual channels, or 'quad' for quad.
+        camera can be 1-4 for individual channels, or 'quad' for the
+        quad stream (camera=5 on F1194 multi-channel encoders).
         """
         if camera == "quad":
+            # Quad view is typically camera 5 on multi-channel encoders
+            # Try camera=5 first, fall back to quad=yes parameter
+            url = f"{self.base_url}/axis-cgi/jpg/image.cgi?camera=5"
+            try:
+                resp = self.session.get(url, timeout=self.timeout)
+                if resp.status_code == 200:
+                    img_array = np.frombuffer(resp.content, dtype=np.uint8)
+                    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                    if img is not None:
+                        return img
+            except requests.exceptions.RequestException:
+                pass
+            # Fallback: try quad=yes parameter
             url = (f"{self.base_url}/axis-cgi/jpg/image.cgi"
                    f"?camera=1&squarepixel=1&quad=yes")
         else:
@@ -302,7 +316,11 @@ class OverlayLine:
         return LINE_COLORS.get(self.color_name, LINE_COLORS["White"])
 
     def get_extended_points(self, img_width, img_height):
-        """Calculate line endpoints extended to image edges."""
+        """Calculate line endpoints, optionally extended to image edges.
+
+        When extended, the line is projected to whichever image boundary
+        it hits first (top, bottom, left, or right).
+        """
         x1, y1 = self.pt1
         x2, y2 = self.pt2
         dx = x2 - x1
@@ -311,30 +329,76 @@ class OverlayLine:
         if dx == 0 and dy == 0:
             return self.pt1, self.pt2
 
-        # Vertical line
+        if not self.extend_left and not self.extend_right:
+            return self.pt1, self.pt2
+
+        # Vertical line (dx == 0)
         if dx == 0:
             top = (x1, 0) if self.extend_left else self.pt1
             bot = (x1, img_height - 1) if self.extend_right else self.pt2
             return top, bot
 
-        # Calculate slope
-        slope = dy / dx
+        # Horizontal line (dy == 0)
+        if dy == 0:
+            left = (0, y1) if self.extend_left else self.pt1
+            right = (img_width - 1, y1) if self.extend_right else self.pt2
+            return left, right
 
-        # Extend left (toward x=0)
+        # General case: angled line - find intersection with image boundaries
+        # Line parameterized as: P = pt1 + t * (pt2 - pt1)
+        # Extend "left" = extend backward from pt1 (t < 0 direction)
+        # Extend "right" = extend forward from pt2 (t > 1 direction)
+
+        def clip_to_boundary(px, py, vx, vy):
+            """From point (px,py) going in direction (vx,vy), find where
+            it hits the image boundary. Returns the boundary point."""
+            candidates = []
+            # Left edge: x=0
+            if vx != 0:
+                t = (0 - px) / vx
+                if t > 0:
+                    yy = py + t * vy
+                    if 0 <= yy <= img_height - 1:
+                        candidates.append((t, (0, int(yy))))
+            # Right edge: x=img_width-1
+            if vx != 0:
+                t = (img_width - 1 - px) / vx
+                if t > 0:
+                    yy = py + t * vy
+                    if 0 <= yy <= img_height - 1:
+                        candidates.append((t, (img_width - 1, int(yy))))
+            # Top edge: y=0
+            if vy != 0:
+                t = (0 - py) / vy
+                if t > 0:
+                    xx = px + t * vx
+                    if 0 <= xx <= img_width - 1:
+                        candidates.append((t, (int(xx), 0)))
+            # Bottom edge: y=img_height-1
+            if vy != 0:
+                t = (img_height - 1 - py) / vy
+                if t > 0:
+                    xx = px + t * vx
+                    if 0 <= xx <= img_width - 1:
+                        candidates.append((t, (int(xx), img_height - 1)))
+            if candidates:
+                # Return the nearest boundary intersection
+                candidates.sort(key=lambda c: c[0])
+                return candidates[0][1]
+            return (int(px), int(py))
+
+        # Direction vector from pt1 to pt2
+        # Extend left: go backward from pt1
         if self.extend_left:
-            y_at_left = int(y1 + slope * (0 - x1))
-            y_at_left = max(0, min(img_height - 1, y_at_left))
-            left_pt = (0, y_at_left)
+            left_pt = clip_to_boundary(x1, y1, -dx, -dy)
         else:
-            left_pt = (min(x1, x2), y1 if x1 < x2 else y2)
+            left_pt = self.pt1
 
-        # Extend right (toward x=img_width-1)
+        # Extend right: go forward from pt2
         if self.extend_right:
-            y_at_right = int(y1 + slope * (img_width - 1 - x1))
-            y_at_right = max(0, min(img_height - 1, y_at_right))
-            right_pt = (img_width - 1, y_at_right)
+            right_pt = clip_to_boundary(x2, y2, dx, dy)
         else:
-            right_pt = (max(x1, x2), y1 if x1 > x2 else y2)
+            right_pt = self.pt2
 
         return left_pt, right_pt
 
@@ -380,22 +444,27 @@ class OverlayGenerator:
             # Draw the line with thickness
             draw.line([pt_a, pt_b], fill=color, width=self.line_thickness)
 
-            # Draw label near the midpoint
-            mid_x = (pt_a[0] + pt_b[0]) // 2
-            mid_y = (pt_a[1] + pt_b[1]) // 2
-
+            # Draw label on the line itself (right side for horizontal,
+            # beside for vertical)
             label = line.label
             text_bbox = draw.textbbox((0, 0), label, font=font)
             text_w = text_bbox[2] - text_bbox[0]
             text_h = text_bbox[3] - text_bbox[1]
 
-            # Position label above/beside line
             if line.is_vertical():
-                text_x = mid_x + 8
-                text_y = mid_y - text_h // 2
+                # Place label beside the line, near the top of the drawn segment
+                text_x = pt_a[0] + 8
+                text_y = pt_a[1] + 10
             else:
-                text_x = width - text_w - 15
-                text_y = mid_y - text_h - 6
+                # Place label at the right end of the drawn line, just above
+                text_x = pt_b[0] - text_w - 10
+                # Calculate y at that x position along the line
+                if pt_b[0] != pt_a[0]:
+                    t = (text_x - pt_a[0]) / (pt_b[0] - pt_a[0])
+                    line_y_at_label = int(pt_a[1] + t * (pt_b[1] - pt_a[1]))
+                else:
+                    line_y_at_label = pt_b[1]
+                text_y = line_y_at_label - text_h - 4
 
             # Clamp to image bounds
             text_x = max(2, min(width - text_w - 2, text_x))
@@ -697,10 +766,21 @@ class DistanceOverlayApp:
             # Convert RGBA to RGB for cv2
             color_rgb = line.color_rgba[:3]
             cv2.line(img_rgb, pt_a, pt_b, color_rgb, 2)
-            # Label
-            mid_x = (pt_a[0] + pt_b[0]) // 2
-            mid_y = (pt_a[1] + pt_b[1]) // 2
-            cv2.putText(img_rgb, line.label, (mid_x + 5, mid_y - 5),
+            # Place label at the right end of the line (or top for vertical)
+            if line.is_vertical():
+                label_x = pt_a[0] + 8
+                label_y = pt_a[1] + 20
+            else:
+                label_x = pt_b[0] - 40
+                # Calculate y on line at label_x
+                if pt_b[0] != pt_a[0]:
+                    t = (label_x - pt_a[0]) / (pt_b[0] - pt_a[0])
+                    label_y = int(pt_a[1] + t * (pt_b[1] - pt_a[1])) - 8
+                else:
+                    label_y = pt_b[1] - 8
+            label_x = max(5, min(w - 50, label_x))
+            label_y = max(15, min(h - 5, label_y))
+            cv2.putText(img_rgb, line.label, (label_x, label_y),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, color_rgb, 2)
 
         # Draw pending point (first click of two-point line)
@@ -801,7 +881,7 @@ class DistanceOverlayApp:
             label = self._get_next_label()
             line = OverlayLine(pt1, pt2, label=label,
                                color_name="White",
-                               extend_left=True, extend_right=True)
+                               extend_left=False, extend_right=False)
             self.lines.append(line)
 
             self._display_snapshot()
@@ -867,7 +947,7 @@ class DistanceOverlayApp:
             label = self._get_next_label()
             line = OverlayLine((0, y_pos), (w - 1, y_pos),
                                label=label, color_name="White",
-                               extend_left=True, extend_right=True)
+                               extend_left=False, extend_right=False)
             self.lines.append(line)
 
         self._display_snapshot()
@@ -1013,17 +1093,14 @@ class DistanceOverlayApp:
             ovl_path = self.encoder.upload_overlay_image(
                 str(overlay_path), scale_to_resolution=False)
 
-            # For quad, apply to all 4 channels
+            # For quad, apply to camera 5 (quad view channel)
             if camera == "quad":
-                identities = []
-                for ch in range(1, 5):
-                    identity = self.encoder.add_image_overlay(ch, ovl_path)
-                    identities.append(identity)
+                identity = self.encoder.add_image_overlay(5, ovl_path)
                 self.status_var.set(
-                    f"Overlay applied to all 4 channels! IDs: {identities}")
+                    f"Overlay applied to Quad view! ID: {identity}")
                 messagebox.showinfo("Success",
-                    f"Distance overlay applied to Quad (all channels)!\n\n"
-                    f"Overlay IDs: {identities}\n"
+                    f"Distance overlay applied to Quad view (camera 5)!\n\n"
+                    f"Overlay ID: {identity}\n"
                     f"Lines: {len(self.lines)}")
             else:
                 identity = self.encoder.add_image_overlay(camera, ovl_path)
