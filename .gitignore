@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# YOLOv8 model weights (download separately)
+*.pt
+
+# Output files
+output/
+*.mp4
+!2026-*.avi
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Packages directory (for offline install)
+packages/

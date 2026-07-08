@@ -1,0 +1,25 @@
+# Vehicle Distance Analysis Tool - Requirements
+# Install with: pip install -r requirements.txt
+#
+# NOTE: This tool is designed for offline use.
+# Download all packages first, then install from local files on the target machine.
+# To download for offline install:
+#   pip download -r requirements.txt -d ./packages/
+# To install from local files:
+#   pip install --no-index --find-links=./packages/ -r requirements.txt
+
+# Core
+opencv-python>=4.6.0
+numpy>=1.21.0
+Pillow>=9.0.0
+
+# Object Detection
+ultralytics>=8.0.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Optimization (optional but recommended)
+scipy>=1.7.0
+
+# GUI (included with Python, listed for reference)
+# tkinter - included with standard Python installation
