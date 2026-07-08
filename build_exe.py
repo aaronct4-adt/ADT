@@ -33,46 +33,35 @@ from pathlib import Path
 
 def build():
     """Run PyInstaller to create the exe."""
-    
+
     # Ensure yolov8n.pt exists
     model_path = Path("yolov8n.pt")
     if not model_path.exists():
         print("Downloading YOLOv8 model...")
         from ultralytics import YOLO
         YOLO("yolov8n.pt")
-    
-    # Find ultralytics package location for data files
-    import ultralytics
-    ultralytics_path = Path(ultralytics.__file__).parent
-    
+
     # PyInstaller command
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--name", "VehicleDistanceAnalysis",
-        "--onedir",                          # Folder output (faster startup)
-        "--windowed",                        # No console window (GUI app)
-        "--noconfirm",                       # Overwrite previous build
-        
-        # Add the YOLOv8 model weights
+        "--onedir",
+        "--windowed",
+        "--noconfirm",
+
+        # Bundle the YOLOv8 model weights
         "--add-data", f"yolov8n.pt{os.pathsep}.",
-        
-        # Add ultralytics config files
-        "--add-data", f"{ultralytics_path}{os.pathsep}ultralytics",
-        
-        # Hidden imports that PyInstaller might miss
-        "--hidden-import", "ultralytics",
-        "--hidden-import", "ultralytics.nn",
-        "--hidden-import", "ultralytics.nn.tasks",
-        "--hidden-import", "ultralytics.utils",
-        "--hidden-import", "ultralytics.engine",
-        "--hidden-import", "ultralytics.engine.model",
-        "--hidden-import", "ultralytics.engine.results",
-        "--hidden-import", "ultralytics.models",
-        "--hidden-import", "ultralytics.models.yolo",
-        "--hidden-import", "torch",
-        "--hidden-import", "torchvision",
+
+        # Collect ENTIRE packages (not just hidden imports)
+        # This is critical — ultralytics has many submodules and data files
+        "--collect-all", "ultralytics",
+        "--collect-all", "torch",
+        "--collect-all", "torchvision",
+
+        # Hidden imports for standard library / other packages
         "--hidden-import", "scipy",
         "--hidden-import", "scipy.optimize",
+        "--hidden-import", "scipy.optimize.linear_sum_assignment",
         "--hidden-import", "PIL",
         "--hidden-import", "PIL.Image",
         "--hidden-import", "PIL.ImageTk",
@@ -82,24 +71,24 @@ def build():
         "--hidden-import", "tkinter.ttk",
         "--hidden-import", "tkinter.filedialog",
         "--hidden-import", "tkinter.messagebox",
-        
+
         # Exclude unnecessary modules to reduce size
         "--exclude-module", "matplotlib",
         "--exclude-module", "IPython",
         "--exclude-module", "jupyter",
         "--exclude-module", "notebook",
         "--exclude-module", "tensorboard",
-        
+
         # Entry point
         "run_analysis.py",
     ]
-    
+
     print("Running PyInstaller...")
     print(f"Command: {' '.join(cmd)}")
     print()
-    
+
     result = subprocess.run(cmd)
-    
+
     if result.returncode == 0:
         print()
         print("=" * 60)
