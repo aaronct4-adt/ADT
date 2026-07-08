@@ -52,6 +52,9 @@ def build():
         # Bundle the YOLOv8 model weights
         "--add-data", f"yolov8n.pt{os.pathsep}.",
 
+        # Runtime hook to configure ultralytics paths in frozen env
+        "--runtime-hook", "runtime_hook.py",
+
         # Collect ENTIRE packages (not just hidden imports)
         # This is critical — ultralytics has many submodules and data files
         "--collect-all", "ultralytics",

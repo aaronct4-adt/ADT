@@ -5,10 +5,48 @@ Detects cars, trucks, buses, and motorcycles in video frames.
 Works offline once the model weights are downloaded.
 """
 
+import os
+import sys
 import numpy as np
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
 from pathlib import Path
+
+# Import ultralytics at module level so PyInstaller can trace it
+from ultralytics import YOLO
+
+
+def _get_model_path(model_name: str) -> str:
+    """
+    Resolve the model file path, handling both normal and frozen (exe) environments.
+    
+    When running as a PyInstaller exe, bundled data files are in a temp directory
+    referenced by sys._MEIPASS (onedir) or next to the exe.
+    """
+    # Check if running as a frozen exe
+    if getattr(sys, 'frozen', False):
+        # PyInstaller bundles files into _MEIPASS or next to the exe
+        base_paths = [
+            Path(sys._MEIPASS),                    # --onefile temp dir
+            Path(sys.executable).parent,            # --onedir: next to exe
+            Path(sys.executable).parent / '_internal',  # some PyInstaller versions
+        ]
+        for base in base_paths:
+            candidate = base / model_name
+            if candidate.exists():
+                return str(candidate)
+    
+    # Normal Python execution: check current dir, then script dir
+    if Path(model_name).exists():
+        return model_name
+    
+    script_dir = Path(__file__).parent.parent.parent
+    candidate = script_dir / model_name
+    if candidate.exists():
+        return str(candidate)
+    
+    # Fall back to the name (ultralytics will try to download it)
+    return model_name
 
 
 @dataclass
@@ -75,20 +113,13 @@ class VehicleDetector:
             iou_threshold: NMS IoU threshold
             vehicle_classes: COCO class IDs to detect (default: car, motorcycle, bus, truck)
         """
-        try:
-            from ultralytics import YOLO
-        except ImportError:
-            raise ImportError(
-                "ultralytics not installed. Run: pip install ultralytics"
-            )
-        
-        self._model_path = model_path
+        self._model_path = _get_model_path(model_path)
         self._conf_thresh = confidence_threshold
         self._iou_thresh = iou_threshold
         self._vehicle_classes = vehicle_classes or [2, 3, 5, 7]
         
         # Load model
-        self._model = YOLO(model_path)
+        self._model = YOLO(self._model_path)
         
         # Get class names from model
         self._class_names = self._model.names
