@@ -18,6 +18,9 @@ ultralytics>=8.0.0
 torch>=2.0.0
 torchvision>=0.15.0
 
+# Required by ultralytics internally
+matplotlib>=3.5.0
+
 # Optimization (optional but recommended)
 scipy>=1.7.0
 

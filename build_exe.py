@@ -76,7 +76,6 @@ def build():
         "--hidden-import", "tkinter.messagebox",
 
         # Exclude unnecessary modules to reduce size
-        "--exclude-module", "matplotlib",
         "--exclude-module", "IPython",
         "--exclude-module", "jupyter",
         "--exclude-module", "notebook",
