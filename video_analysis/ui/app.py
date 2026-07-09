@@ -545,6 +545,34 @@ class VideoAnalysisApp:
         
         return frame_idx - self._process_start_frame
     
+    @staticmethod
+    def _filter_cross_median(tracks, lane_result):
+        """
+        Filter out vehicles that are on the opposite side of the freeway.
+        
+        Removes any tracked vehicle whose bottom-center is to the left of
+        the left lane line (i.e., across the median/barrier).
+        """
+        if not lane_result.left_lane:
+            return tracks
+        
+        filtered = []
+        for track in tracks:
+            x1, y1, x2, y2 = track.bbox
+            vehicle_center_x = (x1 + x2) / 2.0
+            vehicle_bottom_y = float(y2)
+            
+            # Get the left lane x-position at this vehicle's y-level
+            lane_x = lane_result.left_lane.get_x_at_y(vehicle_bottom_y)
+            
+            # Keep the vehicle only if it's to the RIGHT of the left lane line
+            # (i.e., on our side of the road)
+            # Add a small margin (20px) to avoid filtering vehicles right on the line
+            if vehicle_center_x >= lane_x - 20:
+                filtered.append(track)
+        
+        return filtered
+    
     def _update_canvas(self, frame: np.ndarray):
         """Display a frame on the canvas, scaled to fit."""
         canvas_w = self._canvas.winfo_width()
@@ -1089,12 +1117,16 @@ class VideoAnalysisApp:
                 # Extract selected view
                 view_frame = self._extract_view(frame)
                 
+                # Detect lanes first (needed for vehicle filtering)
+                lane_result = lane_det.detect(view_frame)
+                
                 # Detect vehicles
                 detections = detector.detect(view_frame)
                 tracks = tracker.update(detections)
                 
-                # Detect lanes
-                lane_result = lane_det.detect(view_frame)
+                # Filter out cross-median vehicles (beyond left lane line)
+                if lane_result and lane_result.left_lane:
+                    tracks = self._filter_cross_median(tracks, lane_result)
                 
                 # Estimate distances - timestamp is from video T0
                 timestamp = idx / self._fps

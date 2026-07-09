@@ -424,6 +424,7 @@ class LaneDetector:
                           h: int, w: int, side: str) -> Optional[LaneLine]:
         """
         Create a LaneLine from BEV polynomial fit, projected back to camera view.
+        Offsets the line to the inside edge of the lane marking.
         """
         if fit is None:
             return None
@@ -431,6 +432,17 @@ class LaneDetector:
         # Generate points in BEV space
         y_bev = np.linspace(0, h - 1, 40)
         x_bev = fit[0] * y_bev**2 + fit[1] * y_bev + fit[2]
+        
+        # Offset to inside edge of lane marking
+        # Lane markings are typically ~10-15cm wide, which in BEV is ~5-10px
+        # "Inside" means toward the driving lane:
+        #   Left lane: shift RIGHT (+x in BEV)
+        #   Right lane: shift LEFT (-x in BEV)
+        inside_offset_px = 6  # pixels in BEV space
+        if side == "left":
+            x_bev = x_bev + inside_offset_px
+        elif side == "right":
+            x_bev = x_bev - inside_offset_px
         
         # Filter points within image bounds
         valid = (x_bev >= 0) & (x_bev < w)
