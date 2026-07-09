@@ -134,20 +134,15 @@ class DistanceEstimator:
         # the full visible vehicle (roof to road, with perspective distortion).
         # For plan-view measurements, we need the vehicle's ROAD-LEVEL footprint.
         #
-        # The vehicle's actual width at road level is narrower than the full bbox
-        # because the bbox includes the roof/windshield which appears wider due
-        # to perspective. We estimate the footprint by:
-        # 1. Using the known real-world width (e.g., 1.8m for a car)
-        # 2. Computing how many pixels that width occupies at this distance
-        # 3. Centering that footprint within the bbox
+        # Approach: shrink the YOLO bbox width by 10% on each side.
+        # YOLO boxes are typically wider than the actual vehicle body
+        # (they include mirrors, shadows, and some background).
+        # This gives a better approximation of the vehicle body edges.
         
-        # Calculate the expected pixel width of the vehicle at this distance
-        footprint_width_px = (real_width * self._camera.focal_px[0]) / max(distance, 1.0)
-        
-        # The footprint is centered within the bbox
-        bbox_center_x = (x1 + x2) / 2.0
-        footprint_left_x = bbox_center_x - footprint_width_px / 2.0
-        footprint_right_x = bbox_center_x + footprint_width_px / 2.0
+        bbox_width = x2 - x1
+        inset = int(bbox_width * 0.10)
+        footprint_left_x = float(x1 + inset)
+        footprint_right_x = float(x2 - inset)
         
         # Use the bbox bottom (y2) as the vehicle's road contact point
         footprint_bottom_y = float(y2)
@@ -181,13 +176,6 @@ class DistanceEstimator:
                     lane_offset_right = self._camera.lateral_offset_px_to_m(px_diff, distance)
                     lane_offset_right = round(abs(lane_offset_right), 2)
         
-        # Store footprint edges in the bbox field for visualization
-        # (Use the footprint, not the raw YOLO bbox, for drawing)
-        footprint_bbox = (
-            int(footprint_left_x), y1,
-            int(footprint_right_x), y2
-        )
-        
         return VehicleDistance(
             track_id=track.track_id,
             class_name=track.class_name,
@@ -195,7 +183,7 @@ class DistanceEstimator:
             lateral_offset_m=round(lateral_offset, 2),
             lane_offset_left_m=lane_offset_left,
             lane_offset_right_m=lane_offset_right,
-            bbox=footprint_bbox,
+            bbox=bbox,
             confidence=track.confidence,
             method="combined",
         )

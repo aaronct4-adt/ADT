@@ -171,11 +171,10 @@ class FrameAnnotator:
         """
         Draw the vehicle footprint as a flat plan-view trapezoid on the road.
         
-        This represents the vehicle's ground footprint (length × width)
-        projected onto the road surface. It's a SHORT, FLAT shape —
-        not a tall rectangle. The height of the polygon represents the
-        vehicle's LENGTH on the road plane (compressed by perspective),
-        not its visual height in the image.
+        Uses the YOLO bbox shrunk inward by 10% on each side (YOLO boxes
+        are typically wider than the actual vehicle body). The polygon
+        covers only the bottom 30% of the bbox height, representing the
+        vehicle's road-level footprint.
         """
         x1, y1, x2, y2 = bbox
         h, w = frame.shape[:2]
@@ -184,41 +183,37 @@ class FrameAnnotator:
         bbox_height = y2 - y1
         center_x = (x1 + x2) / 2.0
         
-        # Tire contact point (rear of vehicle on road)
-        tire_y = int(y1 + bbox_height * 0.92)
+        # Shrink width inward by 10% on each side to match actual vehicle body
+        # (YOLO boxes tend to be wider than the physical vehicle)
+        inset = int(bbox_width * 0.10)
+        body_left = x1 + inset
+        body_right = x2 - inset
+        body_width = body_right - body_left
         
-        # The "front edge" of the plan-view footprint is NOT at y1 (roof).
-        # It should be a short distance above the tire level, representing
-        # the vehicle's LENGTH projected onto the image.
-        #
-        # A typical car is 4.5m long. At the same distance, its apparent
-        # "length on road" in pixels is roughly 25-35% of the bbox height
-        # (because the bbox height includes the full vehicle silhouette).
-        # For closer vehicles (larger bbox), use a smaller fraction.
-        length_fraction = 0.30  # Vehicle length ≈ 30% of bbox visual height
-        footprint_height = int(bbox_height * length_fraction)
-        front_y = tire_y - footprint_height
+        # Tire contact point (rear of vehicle on road) - 85% down
+        tire_y = int(y1 + bbox_height * 0.85)
         
-        # Rear edge (bottom) = full footprint width at tire level
-        rear_left = (x1, tire_y)
-        rear_right = (x2, tire_y)
+        # Front edge of footprint: 25% of bbox height above tire level
+        footprint_depth = int(bbox_height * 0.25)
+        front_y = tire_y - footprint_depth
         
-        # Front edge = slightly narrower (perspective taper) and above tire level
-        taper_fraction = 0.08
-        taper_px = int(bbox_width * taper_fraction)
+        # Rear edge at tire level, full body width
+        rear_left = (body_left, tire_y)
+        rear_right = (body_right, tire_y)
         
-        # Shift front toward vanishing point
+        # Front edge: slightly narrower + shifted toward VP
+        taper_px = int(body_width * 0.06)
         vp_x = w / 2.0
-        lateral_shift = int((vp_x - center_x) * 0.05)
+        lateral_shift = int((vp_x - center_x) * 0.04)
         
-        front_left = (x1 + taper_px + lateral_shift, front_y)
-        front_right = (x2 - taper_px + lateral_shift, front_y)
+        front_left = (body_left + taper_px + lateral_shift, front_y)
+        front_right = (body_right - taper_px + lateral_shift, front_y)
         
-        # Draw the flat plan-view footprint
+        # Draw the flat footprint quadrilateral
         pts = np.array([rear_left, rear_right, front_right, front_left], dtype=np.int32)
         cv2.polylines(frame, [pts], isClosed=True, color=color, thickness=thickness)
         
-        # Thicker rear edge (measurement reference)
+        # Thicker rear edge (this is where distance is measured from)
         cv2.line(frame, rear_left, rear_right, color, thickness + 1)
     
     def _draw_vehicles_no_distance(self, frame: np.ndarray,
@@ -276,13 +271,14 @@ class FrameAnnotator:
                 continue
             
             x1, y1, x2, y2 = vd.bbox
-            vehicle_bottom_y = y2
-            vehicle_left_x = int(x1)     # Left edge of vehicle
-            vehicle_right_x = int(x2)    # Right edge of vehicle
-            
-            # Use tire contact level (92% of bbox height from top)
+            bbox_width = x2 - x1
             bbox_height = y2 - y1
-            tire_y = int(y1 + bbox_height * 0.92)
+            
+            # Match the footprint drawing: 10% inset, 85% tire level
+            inset = int(bbox_width * 0.10)
+            vehicle_left_x = x1 + inset
+            vehicle_right_x = x2 - inset
+            tire_y = int(y1 + bbox_height * 0.85)
             
             color = get_track_color(vd.track_id)
             
