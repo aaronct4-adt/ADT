@@ -11,6 +11,7 @@ Tkinter-based desktop application for:
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+import sys
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
@@ -844,7 +845,10 @@ class VideoAnalysisApp:
             self.root.after(0, self._detection_complete)
             
         except Exception as e:
-            self.root.after(0, self._detection_error, str(e))
+            import traceback
+            error_detail = f"{str(e)}\n\nFull traceback:\n{traceback.format_exc()}"
+            print(error_detail, file=sys.stderr)  # Print to console if visible
+            self.root.after(0, self._detection_error, error_detail)
     
     def _update_progress(self, value: float, frame_idx: int):
         """Update progress bar (called on main thread)."""

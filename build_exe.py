@@ -46,10 +46,10 @@ def build():
         sys.executable, "-m", "PyInstaller",
         "--name", "VehicleDistanceAnalysis",
         "--onedir",
-        "--windowed",
+        "--console",             # USE CONSOLE so errors are visible!
         "--noconfirm",
 
-        # Bundle the YOLOv8 model weights
+        # Bundle the YOLOv8 model weights next to the exe
         "--add-data", f"yolov8n.pt{os.pathsep}.",
 
         # Runtime hook to configure ultralytics paths in frozen env

@@ -23,30 +23,42 @@ def _get_model_path(model_name: str) -> str:
     When running as a PyInstaller exe, bundled data files are in a temp directory
     referenced by sys._MEIPASS (onedir) or next to the exe.
     """
+    searched = []
+    
     # Check if running as a frozen exe
     if getattr(sys, 'frozen', False):
         # PyInstaller bundles files into _MEIPASS or next to the exe
         base_paths = [
-            Path(sys._MEIPASS),                    # --onefile temp dir
-            Path(sys.executable).parent,            # --onedir: next to exe
-            Path(sys.executable).parent / '_internal',  # some PyInstaller versions
+            Path(sys._MEIPASS),                        # --onefile temp dir
+            Path(sys.executable).parent,                # --onedir: next to exe
+            Path(sys.executable).parent / '_internal',  # newer PyInstaller versions
         ]
         for base in base_paths:
             candidate = base / model_name
+            searched.append(str(candidate))
             if candidate.exists():
                 return str(candidate)
     
     # Normal Python execution: check current dir, then script dir
-    if Path(model_name).exists():
-        return model_name
+    cwd_candidate = Path(model_name).resolve()
+    searched.append(str(cwd_candidate))
+    if cwd_candidate.exists():
+        return str(cwd_candidate)
     
     script_dir = Path(__file__).parent.parent.parent
     candidate = script_dir / model_name
+    searched.append(str(candidate))
     if candidate.exists():
         return str(candidate)
     
-    # Fall back to the name (ultralytics will try to download it)
-    return model_name
+    # Raise a clear error instead of silently failing
+    raise FileNotFoundError(
+        f"Cannot find model file '{model_name}'.\n"
+        f"Searched in:\n" + "\n".join(f"  - {p}" for p in searched) + "\n\n"
+        f"Please place '{model_name}' next to the executable or in the working directory.\n"
+        f"You can download it by running:\n"
+        f"  python -c \"from ultralytics import YOLO; YOLO('{model_name}')\""
+    )
 
 
 @dataclass
