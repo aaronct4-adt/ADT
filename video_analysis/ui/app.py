@@ -962,7 +962,7 @@ class VideoAnalysisApp:
                 # Update progress (on main thread)
                 if i % 5 == 0:
                     progress = (i + 1) / n_frames * 100
-                    self.root.after(0, self._update_progress, progress, idx)
+                    self.root.after(0, self._update_progress, progress, i + 1, n_frames)
             
             self._analysis_complete = True
             self.root.after(0, self._detection_complete)
@@ -973,10 +973,10 @@ class VideoAnalysisApp:
             print(error_detail, file=sys.stderr)  # Print to console if visible
             self.root.after(0, self._detection_error, error_detail)
     
-    def _update_progress(self, value: float, frame_idx: int):
+    def _update_progress(self, value: float, current: int, total: int):
         """Update progress bar (called on main thread)."""
         self._progress['value'] = value
-        self._status_var.set(f"Processing frame {frame_idx}/{self._frame_count}...")
+        self._status_var.set(f"Processing frame {current}/{total}...")
     
     def _detection_complete(self):
         """Called when detection finishes."""
@@ -1122,7 +1122,7 @@ class VideoAnalysisApp:
                 
                 if idx % 30 == 0:
                     progress = (idx + 1) / self._frame_count * 100
-                    self.root.after(0, self._update_progress, progress, idx)
+                    self.root.after(0, self._update_progress, progress, idx + 1, self._frame_count)
             
             writer.release()
             self.root.after(0, self._video_export_complete, output_path)
