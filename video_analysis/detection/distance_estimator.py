@@ -147,7 +147,8 @@ class DistanceEstimator:
         # Use the bbox bottom (y2) as the vehicle's road contact point
         footprint_bottom_y = float(y2)
         
-        # Calculate lateral offset from ego center (using footprint center)
+        # Calculate lateral offset from ego center (using bbox center)
+        bbox_center_x = (x1 + x2) / 2.0
         center_offset_px = bbox_center_x - self._camera.principal_point[0]
         lateral_offset = self._camera.lateral_offset_px_to_m(
             center_offset_px, distance
