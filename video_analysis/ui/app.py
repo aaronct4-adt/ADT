@@ -60,6 +60,13 @@ class VideoAnalysisApp:
         self._selected_vehicle_ids: Set[int] = set()
         self._analysis_complete = False
         
+        # Lane drawing state
+        self._drawing_lanes = False
+        self._drawing_which: str = ""  # "left" or "right"
+        self._drawn_left_points: List[Tuple[int, int]] = []
+        self._drawn_right_points: List[Tuple[int, int]] = []
+        self._lane_guides_set = False
+        
         # Camera config
         self._camera_config = None
         
@@ -187,6 +194,8 @@ class VideoAnalysisApp:
         
         ttk.Button(left_panel, text="Run Detection",
                    command=self._run_detection).pack(pady=3, padx=5, fill=tk.X)
+        ttk.Button(left_panel, text="Draw Lane Guides",
+                   command=self._start_lane_drawing).pack(pady=3, padx=5, fill=tk.X)
         ttk.Button(left_panel, text="Select All Vehicles",
                    command=self._select_all_vehicles).pack(pady=3, padx=5, fill=tk.X)
         ttk.Button(left_panel, text="Clear Selection",
@@ -676,6 +685,129 @@ class VideoAnalysisApp:
         end = max(start, min(end, self._frame_count - 1))
         
         return start, end
+
+    # --- Lane Drawing Mode ---
+    
+    def _start_lane_drawing(self):
+        """Enter lane drawing mode."""
+        if self._cap is None:
+            messagebox.showwarning("No Video", "Please open a video first.")
+            return
+        
+        self._drawn_left_points = []
+        self._drawn_right_points = []
+        self._drawing_lanes = True
+        self._drawing_which = "left"
+        
+        self._status_var.set(
+            "LANE DRAWING: Click points along the LEFT lane line (bottom to top). "
+            "Right-click when done to switch to right lane."
+        )
+        
+        # Rebind canvas clicks for drawing
+        self._canvas.bind("<Button-1>", self._on_lane_draw_click)
+        self._canvas.bind("<Button-3>", self._on_lane_draw_next)
+    
+    def _on_lane_draw_click(self, event):
+        """Handle left-click during lane drawing — place a point."""
+        if not self._drawing_lanes:
+            return
+        
+        # Convert canvas coords to frame coords
+        if not hasattr(self, '_display_scale') or self._display_scale == 0:
+            return
+        
+        frame_x = int((event.x - self._display_offset[0]) / self._display_scale)
+        frame_y = int((event.y - self._display_offset[1]) / self._display_scale)
+        
+        # Clamp to image bounds
+        if self._display_frame is not None:
+            h, w = self._display_frame.shape[:2]
+            frame_x = max(0, min(frame_x, w - 1))
+            frame_y = max(0, min(frame_y, h - 1))
+        
+        if self._drawing_which == "left":
+            self._drawn_left_points.append((frame_x, frame_y))
+        else:
+            self._drawn_right_points.append((frame_x, frame_y))
+        
+        # Redraw frame with guide points
+        self._redraw_with_guides()
+        
+        point_count = len(self._drawn_left_points) if self._drawing_which == "left" else len(self._drawn_right_points)
+        side = self._drawing_which.upper()
+        self._status_var.set(
+            f"LANE DRAWING [{side}]: {point_count} points placed. "
+            f"Click more points, or right-click to {'switch to RIGHT lane' if self._drawing_which == 'left' else 'finish'}."
+        )
+    
+    def _on_lane_draw_next(self, event):
+        """Handle right-click during lane drawing — switch side or finish."""
+        if not self._drawing_lanes:
+            return
+        
+        if self._drawing_which == "left":
+            if len(self._drawn_left_points) < 2:
+                self._status_var.set("Need at least 2 points for the left lane. Keep clicking.")
+                return
+            
+            # Switch to right lane
+            self._drawing_which = "right"
+            self._status_var.set(
+                "LANE DRAWING: Now click points along the RIGHT lane line (bottom to top). "
+                "Right-click when done to finish."
+            )
+        else:
+            if len(self._drawn_right_points) < 2:
+                self._status_var.set("Need at least 2 points for the right lane. Keep clicking.")
+                return
+            
+            # Finish drawing
+            self._finish_lane_drawing()
+    
+    def _finish_lane_drawing(self):
+        """Complete lane drawing and set the guides."""
+        self._drawing_lanes = False
+        self._drawing_which = ""
+        self._lane_guides_set = True
+        
+        # Restore normal canvas bindings
+        self._canvas.bind("<Button-1>", self._on_canvas_click)
+        self._canvas.unbind("<Button-3>")
+        
+        # Show confirmation
+        n_left = len(self._drawn_left_points)
+        n_right = len(self._drawn_right_points)
+        self._status_var.set(
+            f"Lane guides set! Left: {n_left} points, Right: {n_right} points. "
+            f"Run Detection to use these guides."
+        )
+        
+        # Redraw with final guides
+        self._redraw_with_guides()
+    
+    def _redraw_with_guides(self):
+        """Redraw the current frame with lane guide points/lines overlaid."""
+        if self._current_frame is None:
+            return
+        
+        display = self._extract_view(self._current_frame)
+        
+        # Draw existing guide points and lines
+        # Left lane in blue
+        for i, pt in enumerate(self._drawn_left_points):
+            cv2.circle(display, pt, 5, (255, 150, 0), -1)  # Blue dot
+            if i > 0:
+                cv2.line(display, self._drawn_left_points[i-1], pt, (255, 150, 0), 2)
+        
+        # Right lane in red
+        for i, pt in enumerate(self._drawn_right_points):
+            cv2.circle(display, pt, 5, (0, 100, 255), -1)  # Red dot
+            if i > 0:
+                cv2.line(display, self._drawn_right_points[i-1], pt, (0, 100, 255), 2)
+        
+        self._display_frame = display
+        self._update_canvas(display)
     
 
     # --- Vehicle Selection ---
@@ -909,6 +1041,22 @@ class VideoAnalysisApp:
             )
             tracker = VehicleTracker(max_age=30, min_hits=3, iou_threshold=0.4)
             lane_det = LaneDetector()
+            
+            # If user drew lane guides, configure the lane detector
+            if self._lane_guides_set and self._drawn_left_points and self._drawn_right_points:
+                # Get effective image dimensions for guide points
+                if self._view_var.get() != "full":
+                    eff_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)) // 2
+                    eff_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) // 2
+                else:
+                    eff_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    eff_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                
+                lane_det.set_lane_guides(
+                    self._drawn_left_points,
+                    self._drawn_right_points,
+                    eff_h, eff_w
+                )
             
             dist_config = DistanceConfig()
             dist_est = DistanceEstimator(self._camera_model, dist_config)

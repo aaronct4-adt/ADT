@@ -109,17 +109,94 @@ class LaneDetector:
         self._src_pts = None
         self._dst_pts = None
         self._last_resolution = None
+        
+        # User-drawn lane guide points (set via set_lane_guides)
+        self._user_left_points: Optional[List[Tuple[int, int]]] = None
+        self._user_right_points: Optional[List[Tuple[int, int]]] = None
+        self._guides_set = False
+    
+    def set_lane_guides(self, left_points: List[Tuple[int, int]], 
+                        right_points: List[Tuple[int, int]],
+                        image_height: int, image_width: int):
+        """
+        Set user-drawn lane guide points to seed the perspective transform.
+        
+        The user clicks points along the left and right lane lines.
+        These define the source trapezoid for the BEV warp, ensuring
+        the perspective transform captures the actual lane region.
+        
+        Args:
+            left_points: List of (x, y) points along the left lane line
+                         (at least 2 points, ordered top to bottom)
+            right_points: List of (x, y) points along the right lane line
+                          (at least 2 points, ordered top to bottom)
+            image_height: Frame height
+            image_width: Frame width
+        """
+        self._user_left_points = sorted(left_points, key=lambda p: p[1])
+        self._user_right_points = sorted(right_points, key=lambda p: p[1])
+        self._guides_set = True
+        
+        # Recompute perspective transform from user guides
+        self._compute_transform_from_guides(image_height, image_width)
+    
+    def _compute_transform_from_guides(self, h: int, w: int):
+        """Compute perspective transform using user-drawn lane guides."""
+        left_pts = self._user_left_points
+        right_pts = self._user_right_points
+        
+        if not left_pts or not right_pts:
+            return
+        
+        # Use the topmost and bottommost points from each lane
+        # to define the source trapezoid
+        left_top = left_pts[0]      # Highest left point (farthest)
+        left_bottom = left_pts[-1]  # Lowest left point (nearest)
+        right_top = right_pts[0]    # Highest right point (farthest)
+        right_bottom = right_pts[-1]  # Lowest right point (nearest)
+        
+        # Source trapezoid: defined by user's lane points
+        src = np.float32([
+            [left_bottom[0], left_bottom[1]],    # Bottom-left
+            [left_top[0], left_top[1]],          # Top-left
+            [right_top[0], right_top[1]],        # Top-right
+            [right_bottom[0], right_bottom[1]],  # Bottom-right
+        ])
+        
+        # Destination: parallel lanes in BEV (straight vertical lines)
+        margin = w * 0.25
+        dst = np.float32([
+            [margin, h],         # Bottom-left
+            [margin, 0],         # Top-left
+            [w - margin, 0],     # Top-right
+            [w - margin, h],     # Bottom-right
+        ])
+        
+        self._src_pts = src
+        self._dst_pts = dst
+        self._M = cv2.getPerspectiveTransform(src, dst)
+        self._M_inv = cv2.getPerspectiveTransform(dst, src)
+        self._warp_size = (w, h)
+        self._last_resolution = (h, w)
+    
+    @property
+    def has_guides(self) -> bool:
+        """Whether user lane guides have been set."""
+        return self._guides_set
     
     def _setup_perspective(self, h: int, w: int):
         """Compute perspective transform matrices for this resolution."""
+        # If user guides are set, don't recompute (they take priority)
+        if self._guides_set and self._M is not None:
+            return
+        
         if self._last_resolution == (h, w):
             return
         
         self._last_resolution = (h, w)
         
-        # Source points: trapezoidal region on the road
-        # These define the "road surface" region in the camera view
-        # Tuned for a wide-angle forward-facing camera
+        # Default source points (used when no user guides provided)
+        # Trapezoidal region on the road for a wide-angle forward camera
         src = np.float32([
             [w * 0.15, h * 0.95],   # Bottom-left
             [w * 0.40, h * 0.55],   # Top-left
