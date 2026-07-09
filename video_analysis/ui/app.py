@@ -1117,10 +1117,10 @@ class VideoAnalysisApp:
         from ..core.config import DistanceConfig
         
         try:
-            # Initialize models - use YOLO11x-seg for segmentation masks
-            # (gives pixel-level vehicle outline for precise footprint)
+            # Initialize models - use YOLO11m-seg for segmentation masks
+            # (medium model: good balance of accuracy and speed)
             detector = VehicleDetector(
-                model_path="yolo11x-seg.pt",
+                model_path="yolo11m-seg.pt",
                 confidence_threshold=0.5,
             )
             tracker = VehicleTracker(max_age=30, min_hits=3, iou_threshold=0.4)
@@ -1325,8 +1325,13 @@ class VideoAnalysisApp:
                 show_lane_distance=True,
             )
             
-            # Determine output resolution
-            self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            # Get the processed range
+            start_frame = getattr(self, '_process_start_frame', 0)
+            end_frame = getattr(self, '_process_end_frame', self._frame_count - 1)
+            n_frames = end_frame - start_frame + 1
+            
+            # Determine output resolution from a sample frame
+            self._cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
             ret, first_frame = self._cap.read()
             if not ret:
                 return
@@ -1342,26 +1347,29 @@ class VideoAnalysisApp:
                                "Cannot create output video file.")
                 return
             
-            self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            # Export only the processed range
+            self._cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
             
-            for idx in range(self._frame_count):
+            for i in range(n_frames):
                 ret, frame = self._cap.read()
                 if not ret:
                     break
                 
+                idx = start_frame + i
                 view_frame = self._extract_view(frame)
                 
-                # Get annotations
-                fd = self._all_distances[idx] if idx < len(self._all_distances) else None
-                lr = self._all_lanes[idx] if idx < len(self._all_lanes) else None
+                # Get annotations using sequential index
+                seq_idx = idx - start_frame
+                fd = self._all_distances[seq_idx] if seq_idx < len(self._all_distances) else None
+                lr = self._all_lanes[seq_idx] if seq_idx < len(self._all_lanes) else None
                 tracks = self._all_tracks.get(idx, [])
                 
                 annotated = annotator.annotate_frame(view_frame, fd, lr, tracks)
                 writer.write(annotated)
                 
-                if idx % 30 == 0:
-                    progress = (idx + 1) / self._frame_count * 100
-                    self.root.after(0, self._update_progress, progress, idx + 1, self._frame_count)
+                if i % 30 == 0:
+                    progress = (i + 1) / n_frames * 100
+                    self.root.after(0, self._update_progress, progress, i + 1, n_frames)
             
             writer.release()
             self.root.after(0, self._video_export_complete, output_path)
