@@ -1113,7 +1113,7 @@ class VideoAnalysisApp:
         from ..detection.vehicle_detector import VehicleDetector
         from ..detection.tracker import VehicleTracker
         from ..detection.lane_detector import LaneDetector
-        from ..detection.distance_estimator import DistanceEstimator
+        from ..detection.distance_estimator import DistanceEstimator, FrameDistances
         from ..core.config import DistanceConfig
         
         try:
@@ -1166,7 +1166,11 @@ class VideoAnalysisApp:
             for i in range(n_frames):
                 ret, frame = self._cap.read()
                 if not ret:
-                    break
+                    # Try explicit seek and retry
+                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame + i)
+                    ret, frame = self._cap.read()
+                    if not ret:
+                        continue
                 
                 idx = start_frame + i
                 

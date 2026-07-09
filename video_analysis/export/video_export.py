@@ -97,7 +97,7 @@ class FrameAnnotator:
         
         # Draw vehicle boxes and distance labels
         if frame_distances:
-            self._draw_vehicles_with_distance(annotated, frame_distances)
+            self._draw_vehicles_with_distance(annotated, frame_distances, lane_result)
             # Draw lane-to-vehicle distance lines on the ground
             if self.show_lane_distance and lane_result and lane_result.has_lanes:
                 self._draw_lane_distance_lines(annotated, frame_distances, lane_result)
@@ -115,7 +115,8 @@ class FrameAnnotator:
         return annotated
     
     def _draw_vehicles_with_distance(self, frame: np.ndarray, 
-                                      fd: FrameDistances):
+                                      fd: FrameDistances,
+                                      lane_result=None):
         """Draw vehicle boxes with distance labels."""
         for vd in fd.vehicles:
             is_selected = vd.track_id in self.selected_ids
@@ -127,12 +128,8 @@ class FrameAnnotator:
             thickness = 3 if is_selected else 1
             x1, y1, x2, y2 = vd.bbox
             
-            # Draw vehicle footprint (use mask if available, else bbox estimate)
-            mask = self._track_masks.get(vd.track_id)
-            if mask is not None:
-                self._draw_vehicle_with_mask(frame, mask, vd.bbox, color, thickness)
-            else:
-                self._draw_3d_box(frame, vd.bbox, vd.distance_m, color, thickness)
+            # Draw vehicle footprint (road-plane parallelogram following lane perspective)
+            self._draw_road_footprint(frame, vd.bbox, vd.distance_m, color, thickness, lane_result)
             
             # Label with ID and class
             label = f"ID:{vd.track_id} {vd.class_name}"
@@ -176,111 +173,81 @@ class FrameAnnotator:
                 cv2.putText(frame, dist_label, (text_x, text_y),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
     
-    def _draw_3d_box(self, frame: np.ndarray, 
-                     bbox: tuple, distance_m: float,
-                     color: tuple, thickness: int):
+    def _draw_road_footprint(self, frame: np.ndarray,
+                             bbox: tuple, distance_m: float,
+                             color: tuple, thickness: int,
+                             lane_result=None):
         """
-        Draw the vehicle footprint using segmentation mask if available,
-        otherwise fall back to bbox-based estimation.
+        Draw the vehicle footprint as a parallelogram on the road surface.
+        
+        The sides of the parallelogram are PARALLEL to the detected lane lines,
+        giving the appearance of a plan-view box projected onto the road.
+        The width matches the vehicle body width (bbox with 10% inset).
         """
         x1, y1, x2, y2 = bbox
         h, w = frame.shape[:2]
-        bbox_height = y2 - y1
+        
         bbox_width = x2 - x1
+        bbox_height = y2 - y1
         
-        # Tire level: 85% down from top of bbox
-        tire_y = int(y1 + bbox_height * 0.85)
-        
-        # Front of footprint: 25% of bbox height above tire level
-        footprint_depth = int(bbox_height * 0.25)
-        front_y = tire_y - footprint_depth
-        
-        # Get vehicle edges at tire level
-        # (Detection.get_edges_at_y uses mask if available, else bbox inset)
-        # We access the mask through the frame_distances stored bbox
-        # Since we only have the bbox here, use the 10% inset fallback
-        center_x = (x1 + x2) / 2.0
+        # Vehicle body width (10% inset from YOLO bbox)
         inset = int(bbox_width * 0.10)
         body_left = x1 + inset
         body_right = x2 - inset
-        body_width = body_right - body_left
         
-        # Rear edge at tire level
+        # Tire level (rear of vehicle on road)
+        tire_y = int(y1 + bbox_height * 0.85)
+        
+        # Determine the lane line angle (slope) to align the footprint
+        # Use the left lane line angle if available, else estimate from VP
+        slope_dx_per_dy = 0.0  # How much x changes per unit y (for the side edges)
+        
+        if lane_result and lane_result.left_lane and len(lane_result.left_lane.points) >= 2:
+            # Get the slope of the left lane line near the vehicle
+            pts = lane_result.left_lane.points
+            # Use two points spanning the vehicle's y-range
+            p_bottom = pts[-1]  # Bottom of lane line
+            p_top = pts[max(0, len(pts) // 2)]  # Middle of lane line
+            dy = p_bottom[1] - p_top[1]
+            dx = p_bottom[0] - p_top[0]
+            if abs(dy) > 10:
+                slope_dx_per_dy = dx / dy  # pixels of x-shift per pixel of y
+        elif lane_result and lane_result.right_lane and len(lane_result.right_lane.points) >= 2:
+            pts = lane_result.right_lane.points
+            p_bottom = pts[-1]
+            p_top = pts[max(0, len(pts) // 2)]
+            dy = p_bottom[1] - p_top[1]
+            dx = p_bottom[0] - p_top[0]
+            if abs(dy) > 10:
+                slope_dx_per_dy = dx / dy
+        else:
+            # No lane lines: estimate from vanishing point
+            vp_x = w / 2.0
+            center_x = (body_left + body_right) / 2.0
+            slope_dx_per_dy = (center_x - vp_x) / max(1, tire_y - h * 0.3)
+        
+        # Footprint depth (how far "forward" the box extends on the road)
+        # Use ~25% of bbox height
+        footprint_depth_py = int(bbox_height * 0.25)
+        
+        # The x-shift for the front edge (following the lane line angle)
+        front_x_shift = int(slope_dx_per_dy * (-footprint_depth_py))
+        
+        # Rear edge at tire level (full body width)
         rear_left = (body_left, tire_y)
         rear_right = (body_right, tire_y)
         
-        # Front edge: slightly narrower + VP shift
-        taper_px = int(body_width * 0.06)
-        vp_x = w / 2.0
-        lateral_shift = int((vp_x - center_x) * 0.04)
+        # Front edge: shifted along the lane line direction
+        front_y = tire_y - footprint_depth_py
+        front_left = (body_left + front_x_shift, front_y)
+        front_right = (body_right + front_x_shift, front_y)
         
-        front_left = (body_left + taper_px + lateral_shift, front_y)
-        front_right = (body_right - taper_px + lateral_shift, front_y)
-        
-        # Draw the flat footprint
+        # Draw the road-plane parallelogram
         pts = np.array([rear_left, rear_right, front_right, front_left], dtype=np.int32)
         cv2.polylines(frame, [pts], isClosed=True, color=color, thickness=thickness)
         
-        # Thicker rear edge
+        # Thicker rear edge (measurement reference)
         cv2.line(frame, rear_left, rear_right, color, thickness + 1)
-    
-    def _draw_vehicle_with_mask(self, frame: np.ndarray, 
-                                 mask: np.ndarray,
-                                 bbox: tuple,
-                                 color: tuple, thickness: int):
-        """
-        Draw the vehicle outline using the segmentation mask contour.
-        
-        Draws the actual detected vehicle silhouette (bottom half only,
-        representing the road-level body outline).
-        """
-        x1, y1, x2, y2 = bbox
-        bbox_height = y2 - y1
-        
-        # Only use the bottom half of the mask (body/tire level, not roof)
-        # This gives a road-level outline
-        mid_y = int(y1 + bbox_height * 0.50)
-        
-        # Zero out the top portion of the mask (we only want the lower body)
-        mask_lower = mask.copy()
-        mask_lower[:mid_y, :] = 0
-        
-        # Also clip to bbox region (avoid stray mask pixels elsewhere)
-        mask_clipped = np.zeros_like(mask_lower)
-        # Expand bbox slightly for the mask region
-        pad = 5
-        clip_x1 = max(0, x1 - pad)
-        clip_x2 = min(mask.shape[1], x2 + pad)
-        clip_y1 = max(0, mid_y)
-        clip_y2 = min(mask.shape[0], y2 + pad)
-        mask_clipped[clip_y1:clip_y2, clip_x1:clip_x2] = mask_lower[clip_y1:clip_y2, clip_x1:clip_x2]
-        
-        # Find contours of the clipped mask
-        contours, _ = cv2.findContours(mask_clipped, cv2.RETR_EXTERNAL, 
-                                        cv2.CHAIN_APPROX_SIMPLE)
-        
-        if not contours:
-            # Fall back to bbox method
-            self._draw_3d_box(frame, bbox, 0, color, thickness)
-            return
-        
-        # Use the largest contour (the vehicle body)
-        largest_contour = max(contours, key=cv2.contourArea)
-        
-        # Draw the contour
-        cv2.drawContours(frame, [largest_contour], -1, color, thickness)
-        
-        # Draw a thicker bottom edge (find the bottommost points)
-        bottom_pts = largest_contour[largest_contour[:, :, 1].argmax()][0]
-        # Find leftmost and rightmost points at or near the bottom
-        bottom_y_threshold = largest_contour[:, :, 1].max() - 5
-        bottom_indices = largest_contour[:, :, 1] >= bottom_y_threshold
-        if bottom_indices.any():
-            bottom_points = largest_contour[bottom_indices.flatten()]
-            if len(bottom_points) >= 2:
-                left_pt = tuple(bottom_points[bottom_points[:, 0].argmin()])
-                right_pt = tuple(bottom_points[bottom_points[:, 0].argmax()])
-                cv2.line(frame, left_pt, right_pt, color, thickness + 1)
     
     def _draw_vehicles_no_distance(self, frame: np.ndarray,
                                     tracks: List[TrackedObject]):
