@@ -152,6 +152,39 @@ class VideoAnalysisApp:
         # Analysis buttons
         ttk.Separator(left_panel, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
         
+        # Processing range frame
+        range_frame = ttk.LabelFrame(left_panel, text="Processing Range")
+        range_frame.pack(pady=5, padx=5, fill=tk.X)
+        
+        # Start frame
+        start_row = ttk.Frame(range_frame)
+        start_row.pack(fill=tk.X, pady=2, padx=3)
+        ttk.Label(start_row, text="Start:", width=5).pack(side=tk.LEFT)
+        self._start_frame_var = tk.StringVar(value="0")
+        self._start_entry = ttk.Entry(start_row, textvariable=self._start_frame_var, width=7)
+        self._start_entry.pack(side=tk.LEFT, padx=2)
+        ttk.Button(start_row, text="Set", width=4,
+                   command=self._set_start_from_slider).pack(side=tk.LEFT, padx=1)
+        self._start_time_label = ttk.Label(start_row, text="(0.0s)")
+        self._start_time_label.pack(side=tk.LEFT, padx=2)
+        
+        # End frame
+        end_row = ttk.Frame(range_frame)
+        end_row.pack(fill=tk.X, pady=2, padx=3)
+        ttk.Label(end_row, text="End:", width=5).pack(side=tk.LEFT)
+        self._end_frame_var = tk.StringVar(value="0")
+        self._end_entry = ttk.Entry(end_row, textvariable=self._end_frame_var, width=7)
+        self._end_entry.pack(side=tk.LEFT, padx=2)
+        ttk.Button(end_row, text="Set", width=4,
+                   command=self._set_end_from_slider).pack(side=tk.LEFT, padx=1)
+        self._end_time_label = ttk.Label(end_row, text="(0.0s)")
+        self._end_time_label.pack(side=tk.LEFT, padx=2)
+        
+        # Range info
+        self._range_info_label = ttk.Label(range_frame, text="Frames: 0  |  Duration: 0.0s",
+                                            font=("", 8))
+        self._range_info_label.pack(pady=2)
+        
         ttk.Button(left_panel, text="Run Detection",
                    command=self._run_detection).pack(pady=3, padx=5, fill=tk.X)
         ttk.Button(left_panel, text="Select All Vehicles",
@@ -275,6 +308,11 @@ class VideoAnalysisApp:
         # Update slider range
         self._slider.configure(to=max(self._frame_count - 1, 1))
         self._current_frame_idx = 0
+        
+        # Set default processing range to full video
+        self._start_frame_var.set("0")
+        self._end_frame_var.set(str(self._frame_count - 1))
+        self._update_range_display()
         
         # Reset analysis state
         self._all_tracks = {}
@@ -473,17 +511,30 @@ class VideoAnalysisApp:
             show_lane_distance=True,
         )
         
+        # Map absolute frame index to sequential index in results
+        seq_idx = self._frame_to_seq_index(idx)
+        
         fd = None
-        if idx < len(self._all_distances):
-            fd = self._all_distances[idx]
+        if seq_idx is not None and seq_idx < len(self._all_distances):
+            fd = self._all_distances[seq_idx]
         
         lr = None
-        if idx < len(self._all_lanes):
-            lr = self._all_lanes[idx]
+        if seq_idx is not None and seq_idx < len(self._all_lanes):
+            lr = self._all_lanes[seq_idx]
         
         tracks = self._all_tracks.get(idx, [])
         
         return annotator.annotate_frame(frame, fd, lr, tracks)
+    
+    def _frame_to_seq_index(self, frame_idx: int) -> Optional[int]:
+        """Convert absolute frame index to sequential index in results."""
+        if not hasattr(self, '_process_start_frame'):
+            return frame_idx  # Legacy: no range set, assume sequential
+        
+        if frame_idx < self._process_start_frame or frame_idx > self._process_end_frame:
+            return None
+        
+        return frame_idx - self._process_start_frame
     
     def _update_canvas(self, frame: np.ndarray):
         """Display a frame on the canvas, scaled to fit."""
@@ -580,6 +631,51 @@ class VideoAnalysisApp:
         """Re-draw frame when canvas resizes."""
         if self._display_frame is not None:
             self._update_canvas(self._display_frame)
+    
+    # --- Processing Range ---
+    
+    def _set_start_from_slider(self):
+        """Set start frame from current slider position."""
+        self._start_frame_var.set(str(self._current_frame_idx))
+        self._update_range_display()
+    
+    def _set_end_from_slider(self):
+        """Set end frame from current slider position."""
+        self._end_frame_var.set(str(self._current_frame_idx))
+        self._update_range_display()
+    
+    def _update_range_display(self):
+        """Update the range info labels."""
+        try:
+            start = int(self._start_frame_var.get())
+            end = int(self._end_frame_var.get())
+        except ValueError:
+            return
+        
+        if self._fps > 0:
+            self._start_time_label.configure(text=f"({start/self._fps:.1f}s)")
+            self._end_time_label.configure(text=f"({end/self._fps:.1f}s)")
+            
+            n_frames = max(0, end - start + 1)
+            duration = n_frames / self._fps
+            self._range_info_label.configure(
+                text=f"Frames: {n_frames}  |  Duration: {duration:.1f}s"
+            )
+    
+    def _get_processing_range(self) -> Tuple[int, int]:
+        """Get the start and end frame for processing."""
+        try:
+            start = int(self._start_frame_var.get())
+            end = int(self._end_frame_var.get())
+        except ValueError:
+            start = 0
+            end = self._frame_count - 1
+        
+        # Clamp to valid range
+        start = max(0, min(start, self._frame_count - 1))
+        end = max(start, min(end, self._frame_count - 1))
+        
+        return start, end
     
 
     # --- Vehicle Selection ---
@@ -687,8 +783,10 @@ class VideoAnalysisApp:
         self._info_text.configure(state=tk.NORMAL)
         self._info_text.delete("1.0", tk.END)
         
-        if frame_idx < len(self._all_distances):
-            fd = self._all_distances[frame_idx]
+        seq_idx = self._frame_to_seq_index(frame_idx)
+        
+        if seq_idx is not None and seq_idx < len(self._all_distances):
+            fd = self._all_distances[seq_idx]
             
             for vd in fd.vehicles:
                 if not self._selected_vehicle_ids or vd.track_id in self._selected_vehicle_ids:
@@ -764,16 +862,23 @@ class VideoAnalysisApp:
     # --- Analysis ---
     
     def _run_detection(self):
-        """Run vehicle detection and tracking on all frames."""
+        """Run vehicle detection and tracking on selected frame range."""
         if self._cap is None:
             messagebox.showwarning("No Video", "Please open a video first.")
             return
         
+        start_frame, end_frame = self._get_processing_range()
+        n_frames = end_frame - start_frame + 1
+        
         # Confirm before running (can take time)
+        start_time = start_frame / self._fps
+        end_time = end_frame / self._fps
         result = messagebox.askyesno(
             "Run Detection",
-            f"This will process {self._frame_count} frames.\n"
-            f"Estimated time: {self._frame_count / 30:.0f} - {self._frame_count / 10:.0f} seconds.\n\n"
+            f"Processing range: frame {start_frame} to {end_frame}\n"
+            f"Time range: {start_time:.1f}s to {end_time:.1f}s\n"
+            f"Frames to process: {n_frames}\n"
+            f"Estimated time: {n_frames / 5:.0f} - {n_frames / 2:.0f} seconds\n\n"
             f"Continue?"
         )
         if not result:
@@ -814,16 +919,24 @@ class VideoAnalysisApp:
             else:
                 w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             
+            # Get processing range
+            start_frame, end_frame = self._get_processing_range()
+            n_frames = end_frame - start_frame + 1
+            
             self._all_tracks = {}
             self._all_distances = []
             self._all_lanes = []
+            self._process_start_frame = start_frame
+            self._process_end_frame = end_frame
             
-            self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            self._cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
             
-            for idx in range(self._frame_count):
+            for i in range(n_frames):
                 ret, frame = self._cap.read()
                 if not ret:
                     break
+                
+                idx = start_frame + i
                 
                 # Extract selected view
                 view_frame = self._extract_view(frame)
@@ -835,20 +948,20 @@ class VideoAnalysisApp:
                 # Detect lanes
                 lane_result = lane_det.detect(view_frame)
                 
-                # Estimate distances
+                # Estimate distances - timestamp is from video T0
                 timestamp = idx / self._fps
                 frame_dist = dist_est.estimate_frame(
                     idx, timestamp, tracks, lane_result, w
                 )
                 
-                # Store results
+                # Store results keyed by absolute frame index
                 self._all_tracks[idx] = list(tracks)
                 self._all_distances.append(frame_dist)
                 self._all_lanes.append(lane_result)
                 
                 # Update progress (on main thread)
-                if idx % 10 == 0:
-                    progress = (idx + 1) / self._frame_count * 100
+                if i % 5 == 0:
+                    progress = (i + 1) / n_frames * 100
                     self.root.after(0, self._update_progress, progress, idx)
             
             self._analysis_complete = True
