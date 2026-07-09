@@ -169,65 +169,43 @@ class FrameAnnotator:
                      bbox: tuple, distance_m: float,
                      color: tuple, thickness: int):
         """
-        Draw the vehicle footprint as a perspective-correct parallelogram
-        that aligns with the road surface direction.
+        Draw the vehicle footprint as a subtle perspective trapezoid.
         
-        The footprint follows the vanishing point perspective so it looks
-        like a plan-view outline projected onto the road plane.
-        The rear edge (bottom) is wider, the front edge (top) is narrower,
-        matching the perspective of the detected lane lines.
+        The rear (bottom) edge aligns with the tire contact point
+        (not the full YOLO bbox bottom which includes shadow/road).
+        The front (top) edge is very slightly narrower for perspective.
         """
         x1, y1, x2, y2 = bbox
         h, w = frame.shape[:2]
         
-        # Vanishing point (center-top of image, where lanes converge)
-        vp_x = w // 2
-        vp_y = int(h * 0.30)
-        
-        # The bbox bottom represents the rear of the vehicle (road level)
-        # The bbox top represents the front (farther away, appears higher)
-        rear_left = (x1, y2)
-        rear_right = (x2, y2)
-        
-        # For the front edge: narrow the box toward the vanishing point
-        # The amount of narrowing depends on the vehicle height in pixels
-        # (taller bbox = more depth = more perspective convergence)
-        bbox_height = y2 - y1
         bbox_width = x2 - x1
+        bbox_height = y2 - y1
+        center_x = (x1 + x2) / 2.0
         
-        # Estimate how much the front edge narrows relative to the rear
-        # Based on perspective: objects shrink as they approach the VP
-        # Use a proportional shrink based on how far y1 is from y2
-        if bbox_height > 20:
-            # Calculate shrink factor based on position relative to VP
-            rear_dist_to_vp = abs(y2 - vp_y)
-            front_dist_to_vp = abs(y1 - vp_y)
-            
-            if rear_dist_to_vp > 0:
-                shrink_ratio = front_dist_to_vp / rear_dist_to_vp
-            else:
-                shrink_ratio = 0.9
-            
-            # Front width is narrower
-            front_width = bbox_width * shrink_ratio
-            front_center_x = x1 + bbox_width / 2.0
-            
-            # Shift front center toward VP horizontally
-            center_x = (x1 + x2) / 2.0
-            vp_pull = (vp_x - center_x) * (1.0 - shrink_ratio) * 0.5
-            front_center_x = center_x + vp_pull
-            
-            front_left = (int(front_center_x - front_width / 2), y1)
-            front_right = (int(front_center_x + front_width / 2), y1)
-        else:
-            front_left = (x1, y1)
-            front_right = (x2, y1)
+        # Tire contact point: approximately 92% down from the top of the bbox
+        # The YOLO bbox often extends below the tires to include shadow/road
+        tire_y = int(y1 + bbox_height * 0.92)
+        
+        # Rear edge (bottom) = full footprint width at tire level
+        rear_left = (x1, tire_y)
+        rear_right = (x2, tire_y)
+        
+        # Front edge (top) = slightly narrower (6% taper for perspective)
+        taper_fraction = 0.06
+        taper_px = int(bbox_width * taper_fraction)
+        
+        # Subtle shift toward vanishing point (image center)
+        vp_x = w / 2.0
+        lateral_shift = int((vp_x - center_x) * 0.03)
+        
+        front_left = (x1 + taper_px + lateral_shift, y1)
+        front_right = (x2 - taper_px + lateral_shift, y1)
         
         # Draw the perspective footprint as a quadrilateral
         pts = np.array([rear_left, rear_right, front_right, front_left], dtype=np.int32)
         cv2.polylines(frame, [pts], isClosed=True, color=color, thickness=thickness)
         
-        # Draw a thicker bottom edge to emphasize the road-level rear face
+        # Thicker bottom edge at tire level (measurement reference line)
         cv2.line(frame, rear_left, rear_right, color, thickness + 1)
     
     def _draw_vehicles_no_distance(self, frame: np.ndarray,
@@ -289,32 +267,34 @@ class FrameAnnotator:
             vehicle_left_x = int(x1)     # Left edge of vehicle
             vehicle_right_x = int(x2)    # Right edge of vehicle
             
+            # Use tire contact level (92% of bbox height from top)
+            bbox_height = y2 - y1
+            tire_y = int(y1 + bbox_height * 0.92)
+            
             color = get_track_color(vd.track_id)
             
-            # Draw line from left lane to vehicle LEFT EDGE
+            # Draw line from left lane to vehicle LEFT EDGE at tire level
             if vd.lane_offset_left_m is not None and lane_result.left_lane:
-                lane_x = int(lane_result.left_lane.get_x_at_y(float(vehicle_bottom_y)))
-                line_y = vehicle_bottom_y - 3
-                self._draw_dashed_line(frame, (lane_x, line_y), 
-                                       (vehicle_left_x, line_y), 
+                lane_x = int(lane_result.left_lane.get_x_at_y(float(tire_y)))
+                self._draw_dashed_line(frame, (lane_x, tire_y), 
+                                       (vehicle_left_x, tire_y), 
                                        LANE_COLOR_LEFT, 2)
                 # Label
                 mid_x = (lane_x + vehicle_left_x) // 2
                 cv2.putText(frame, f"{vd.lane_offset_left_m:.1f}m",
-                           (mid_x - 15, line_y - 5),
+                           (mid_x - 15, tire_y - 5),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, LANE_COLOR_LEFT, 1)
             
-            # Draw line from vehicle RIGHT EDGE to right lane
+            # Draw line from vehicle RIGHT EDGE to right lane at tire level
             if vd.lane_offset_right_m is not None and lane_result.right_lane:
-                lane_x = int(lane_result.right_lane.get_x_at_y(float(vehicle_bottom_y)))
-                line_y = vehicle_bottom_y - 3
-                self._draw_dashed_line(frame, (vehicle_right_x, line_y),
-                                       (lane_x, line_y),
+                lane_x = int(lane_result.right_lane.get_x_at_y(float(tire_y)))
+                self._draw_dashed_line(frame, (vehicle_right_x, tire_y),
+                                       (lane_x, tire_y),
                                        LANE_COLOR_RIGHT, 2)
                 # Label
                 mid_x = (vehicle_right_x + lane_x) // 2
                 cv2.putText(frame, f"{vd.lane_offset_right_m:.1f}m",
-                           (mid_x - 15, line_y - 5),
+                           (mid_x - 15, tire_y - 5),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, LANE_COLOR_RIGHT, 1)
     
     def _draw_dashed_line(self, frame: np.ndarray, 
