@@ -117,8 +117,8 @@ class FrameAnnotator:
             thickness = 3 if is_selected else 1
             x1, y1, x2, y2 = vd.bbox
             
-            # Draw bounding box
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+            # Draw 3D cuboid instead of flat rectangle
+            self._draw_3d_box(frame, vd.bbox, vd.distance_m, color, thickness)
             
             # Label with ID and class
             label = f"ID:{vd.track_id} {vd.class_name}"
@@ -132,12 +132,24 @@ class FrameAnnotator:
             
             # Distance label (only for selected or all if show_distance)
             if self.show_distance and (is_selected or not self.selected_ids):
-                dist_label = f"{vd.distance_m:.1f}m"
-                if is_selected:
-                    dist_label += f" | lat:{vd.lateral_offset_m:.1f}m"
+                # Primary: longitudinal distance (to front of vehicle)
+                dist_label = f"{vd.distance_m:.1f}m fwd"
+                
+                # Add lane-relative lateral distances if available
+                lane_parts = []
+                if vd.lane_offset_left_m is not None:
+                    lane_parts.append(f"L.lane:{vd.lane_offset_left_m:.1f}m")
+                if vd.lane_offset_right_m is not None:
+                    lane_parts.append(f"R.lane:{vd.lane_offset_right_m:.1f}m")
+                
+                if lane_parts:
+                    dist_label += " | " + " ".join(lane_parts)
+                elif is_selected:
+                    # Fallback: show offset from ego center
+                    dist_label += f" | ego lat:{vd.lateral_offset_m:.1f}m"
                 
                 dist_size = cv2.getTextSize(dist_label, cv2.FONT_HERSHEY_SIMPLEX, 
-                                            0.6, 2)[0]
+                                            0.5, 1)[0]
                 
                 # Position below the box
                 text_x = x1
@@ -148,7 +160,73 @@ class FrameAnnotator:
                              (text_x + dist_size[0] + 4, text_y + 4),
                              (0, 0, 0), -1)
                 cv2.putText(frame, dist_label, (text_x, text_y),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+    
+    def _draw_3d_box(self, frame: np.ndarray, 
+                     bbox: tuple, distance_m: float,
+                     color: tuple, thickness: int):
+        """
+        Draw a 3D perspective cuboid around a detected vehicle.
+        
+        Uses the 2D bounding box as the front face, and projects depth
+        lines toward a vanishing point to create a 3D effect.
+        """
+        x1, y1, x2, y2 = bbox
+        h, w = frame.shape[:2]
+        
+        # Vanishing point (approximately at horizon, center of image)
+        vp_x = w // 2
+        vp_y = int(h * 0.35)  # Horizon roughly at 35% from top
+        
+        # Depth of the 3D box in pixels (proportional to bbox size, 
+        # smaller for farther objects)
+        bbox_width = x2 - x1
+        bbox_height = y2 - y1
+        
+        # Depth factor: larger nearby, smaller far away
+        # Use ~25% of bbox width as depth projection
+        depth_factor = 0.25
+        depth_px = int(bbox_width * depth_factor)
+        
+        # Calculate rear face corners by moving toward vanishing point
+        def toward_vp(px, py, amount):
+            """Move a point toward the vanishing point by a fraction."""
+            dx = vp_x - px
+            dy = vp_y - py
+            dist_to_vp = max(1, (dx*dx + dy*dy) ** 0.5)
+            frac = amount / dist_to_vp
+            return (int(px + dx * frac), int(py + dy * frac))
+        
+        # Front face (the standard 2D bbox)
+        front_tl = (x1, y1)
+        front_tr = (x2, y1)
+        front_bl = (x1, y2)
+        front_br = (x2, y2)
+        
+        # Rear face (shifted toward vanishing point)
+        rear_tl = toward_vp(x1, y1, depth_px)
+        rear_tr = toward_vp(x2, y1, depth_px)
+        rear_bl = toward_vp(x1, y2, depth_px)
+        rear_br = toward_vp(x2, y2, depth_px)
+        
+        # Draw front face
+        cv2.line(frame, front_tl, front_tr, color, thickness)
+        cv2.line(frame, front_tr, front_br, color, thickness)
+        cv2.line(frame, front_br, front_bl, color, thickness)
+        cv2.line(frame, front_bl, front_tl, color, thickness)
+        
+        # Draw rear face (slightly transparent / thinner)
+        rear_thick = max(1, thickness - 1)
+        cv2.line(frame, rear_tl, rear_tr, color, rear_thick)
+        cv2.line(frame, rear_tr, rear_br, color, rear_thick)
+        cv2.line(frame, rear_br, rear_bl, color, rear_thick)
+        cv2.line(frame, rear_bl, rear_tl, color, rear_thick)
+        
+        # Draw connecting edges (depth lines)
+        cv2.line(frame, front_tl, rear_tl, color, rear_thick)
+        cv2.line(frame, front_tr, rear_tr, color, rear_thick)
+        cv2.line(frame, front_bl, rear_bl, color, rear_thick)
+        cv2.line(frame, front_br, rear_br, color, rear_thick)
     
     def _draw_vehicles_no_distance(self, frame: np.ndarray,
                                     tracks: List[TrackedObject]):

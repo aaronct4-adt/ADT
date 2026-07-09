@@ -50,7 +50,9 @@ class CSVExporter:
             writer = csv.writer(f)
             writer.writerow([
                 "frame", "time_sec", "vehicle_id", "class", 
-                "distance_m", "lateral_offset_m", "confidence",
+                "distance_m", "lateral_offset_m",
+                "lane_offset_left_m", "lane_offset_right_m",
+                "confidence",
                 "bbox_x1", "bbox_y1", "bbox_x2", "bbox_y2"
             ])
             
@@ -67,6 +69,8 @@ class CSVExporter:
                         vd.class_name,
                         f"{vd.distance_m:.2f}",
                         f"{vd.lateral_offset_m:.2f}",
+                        f"{vd.lane_offset_left_m:.2f}" if vd.lane_offset_left_m is not None else "",
+                        f"{vd.lane_offset_right_m:.2f}" if vd.lane_offset_right_m is not None else "",
                         f"{vd.confidence:.2f}",
                         vd.bbox[0], vd.bbox[1], vd.bbox[2], vd.bbox[3],
                     ])

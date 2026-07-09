@@ -692,9 +692,16 @@ class VideoAnalysisApp:
                 if not self._selected_vehicle_ids or vd.track_id in self._selected_vehicle_ids:
                     self._info_text.insert(tk.END,
                         f"ID:{vd.track_id} {vd.class_name}\n"
-                        f"  Dist: {vd.distance_m:.1f}m\n"
-                        f"  Lat:  {vd.lateral_offset_m:.1f}m\n\n"
+                        f"  Dist fwd: {vd.distance_m:.1f}m\n"
+                        f"  Ego lat:  {vd.lateral_offset_m:.1f}m\n"
                     )
+                    if vd.lane_offset_left_m is not None:
+                        self._info_text.insert(tk.END,
+                            f"  L.lane:   {vd.lane_offset_left_m:.1f}m\n")
+                    if vd.lane_offset_right_m is not None:
+                        self._info_text.insert(tk.END,
+                            f"  R.lane:   {vd.lane_offset_right_m:.1f}m\n")
+                    self._info_text.insert(tk.END, "\n")
             
             if fd.lane:
                 self._info_text.insert(tk.END, "--- Lane ---\n")

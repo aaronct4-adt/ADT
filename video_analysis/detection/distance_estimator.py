@@ -24,11 +24,13 @@ class VehicleDistance:
     """Distance measurement for a single vehicle at a point in time."""
     track_id: int
     class_name: str
-    distance_m: float               # Longitudinal distance (forward)
-    lateral_offset_m: float         # Lateral offset from center (positive = right)
-    bbox: Tuple[int, int, int, int]
-    confidence: float
-    method: str                     # "width", "ground", or "combined"
+    distance_m: float               # Longitudinal distance to front of vehicle (ground plane)
+    lateral_offset_m: float         # Lateral offset from ego center (positive = right)
+    lane_offset_left_m: Optional[float] = None   # Distance from left lane line to vehicle (meters)
+    lane_offset_right_m: Optional[float] = None  # Distance from right lane line to vehicle (meters)
+    bbox: Tuple[int, int, int, int] = (0, 0, 0, 0)
+    confidence: float = 0.0
+    method: str = "combined"        # "width", "ground", or "combined"
 
 
 @dataclass
@@ -93,19 +95,22 @@ class DistanceEstimator:
         
         # Estimate distance to each tracked vehicle
         for track in tracks:
-            vd = self._estimate_vehicle_distance(track)
+            vd = self._estimate_vehicle_distance(track, lane_result, image_width)
             if vd is not None:
                 result.vehicles.append(vd)
         
-        # Estimate lane distances
+        # Estimate lane distances (ego vehicle to lane edges)
         if lane_result and lane_result.has_lanes and image_width:
             result.lane = self._estimate_lane_distances(lane_result, image_width)
         
         return result
     
-    def _estimate_vehicle_distance(self, track: TrackedObject) -> Optional[VehicleDistance]:
-        """Estimate distance to a single tracked vehicle."""
+    def _estimate_vehicle_distance(self, track: TrackedObject,
+                                     lane_result: Optional[LaneDetectionResult] = None,
+                                     image_width: Optional[int] = None) -> Optional[VehicleDistance]:
+        """Estimate distance to a single tracked vehicle, including lane offsets."""
         bbox = track.bbox
+        x1, y1, x2, y2 = bbox
         
         # Get assumed width based on vehicle class
         real_width = self._get_vehicle_width(track.class_name)
@@ -124,17 +129,44 @@ class DistanceEstimator:
         # Apply temporal smoothing
         distance = self._smooth_distance(track.track_id, distance)
         
-        # Calculate lateral offset
+        # Calculate lateral offset from ego center
         center_offset_px = self._camera.bbox_center_offset(bbox)
         lateral_offset = self._camera.lateral_offset_px_to_m(
             center_offset_px, distance
         )
+        
+        # Calculate distance from lane lines to vehicle bottom-center
+        lane_offset_left = None
+        lane_offset_right = None
+        
+        if lane_result and lane_result.has_lanes:
+            vehicle_bottom_y = float(y2)
+            vehicle_center_x = (x1 + x2) / 2.0
+            
+            # Get lane line x-position at the vehicle's y-level
+            if lane_result.left_lane:
+                lane_x = lane_result.left_lane.get_x_at_y(vehicle_bottom_y)
+                # Lateral distance: vehicle center to left lane line
+                px_diff = vehicle_center_x - lane_x
+                if px_diff > 0 and distance > 0:
+                    lane_offset_left = self._camera.lateral_offset_px_to_m(px_diff, distance)
+                    lane_offset_left = round(abs(lane_offset_left), 2)
+            
+            if lane_result.right_lane:
+                lane_x = lane_result.right_lane.get_x_at_y(vehicle_bottom_y)
+                # Lateral distance: right lane line to vehicle center
+                px_diff = lane_x - vehicle_center_x
+                if px_diff > 0 and distance > 0:
+                    lane_offset_right = self._camera.lateral_offset_px_to_m(px_diff, distance)
+                    lane_offset_right = round(abs(lane_offset_right), 2)
         
         return VehicleDistance(
             track_id=track.track_id,
             class_name=track.class_name,
             distance_m=round(distance, 2),
             lateral_offset_m=round(lateral_offset, 2),
+            lane_offset_left_m=lane_offset_left,
+            lane_offset_right_m=lane_offset_right,
             bbox=bbox,
             confidence=track.confidence,
             method="combined",
