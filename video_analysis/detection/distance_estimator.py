@@ -135,27 +135,31 @@ class DistanceEstimator:
             center_offset_px, distance
         )
         
-        # Calculate distance from lane lines to vehicle bottom-center
+        # Calculate distance from lane lines to vehicle EDGE (not center)
+        # This gives plan-view clearance: how far is the vehicle body from the lane line
         lane_offset_left = None
         lane_offset_right = None
         
         if lane_result and lane_result.has_lanes:
             vehicle_bottom_y = float(y2)
-            vehicle_center_x = (x1 + x2) / 2.0
+            # Use the vehicle edges (not center) for clearance measurement
+            vehicle_left_edge_x = float(x1)    # Left side of vehicle
+            vehicle_right_edge_x = float(x2)   # Right side of vehicle
             
-            # Get lane line x-position at the vehicle's y-level
+            # Left lane: distance from left lane line to vehicle's LEFT edge
             if lane_result.left_lane:
                 lane_x = lane_result.left_lane.get_x_at_y(vehicle_bottom_y)
-                # Lateral distance: vehicle center to left lane line
-                px_diff = vehicle_center_x - lane_x
+                # Pixel gap: vehicle left edge minus lane line x
+                px_diff = vehicle_left_edge_x - lane_x
                 if px_diff > 0 and distance > 0:
                     lane_offset_left = self._camera.lateral_offset_px_to_m(px_diff, distance)
                     lane_offset_left = round(abs(lane_offset_left), 2)
             
+            # Right lane: distance from vehicle's RIGHT edge to right lane line
             if lane_result.right_lane:
                 lane_x = lane_result.right_lane.get_x_at_y(vehicle_bottom_y)
-                # Lateral distance: right lane line to vehicle center
-                px_diff = lane_x - vehicle_center_x
+                # Pixel gap: lane line x minus vehicle right edge
+                px_diff = lane_x - vehicle_right_edge_x
                 if px_diff > 0 and distance > 0:
                     lane_offset_right = self._camera.lateral_offset_px_to_m(px_diff, distance)
                     lane_offset_right = round(abs(lane_offset_right), 2)

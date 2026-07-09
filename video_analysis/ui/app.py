@@ -550,25 +550,35 @@ class VideoAnalysisApp:
         """
         Filter out vehicles that are on the opposite side of the freeway.
         
-        Removes any tracked vehicle whose bottom-center is to the left of
-        the left lane line (i.e., across the median/barrier).
+        Removes any tracked vehicle whose bottom-center is:
+        - To the LEFT of the left lane line (oncoming traffic across median)
+        - OR to the RIGHT of the right lane line by a large margin
+          (vehicles on far side of multi-lane road)
         """
-        if not lane_result.left_lane:
-            return tracks
-        
         filtered = []
         for track in tracks:
             x1, y1, x2, y2 = track.bbox
             vehicle_center_x = (x1 + x2) / 2.0
             vehicle_bottom_y = float(y2)
             
-            # Get the left lane x-position at this vehicle's y-level
-            lane_x = lane_result.left_lane.get_x_at_y(vehicle_bottom_y)
+            keep = True
             
-            # Keep the vehicle only if it's to the RIGHT of the left lane line
-            # (i.e., on our side of the road)
-            # Add a small margin (20px) to avoid filtering vehicles right on the line
-            if vehicle_center_x >= lane_x - 20:
+            # Check left boundary: vehicle must be RIGHT of left lane
+            if lane_result.left_lane:
+                lane_x = lane_result.left_lane.get_x_at_y(vehicle_bottom_y)
+                # Vehicle center must be to the right of left lane (with margin)
+                if vehicle_center_x < lane_x - 30:
+                    keep = False
+            
+            # Check right boundary: vehicle must be LEFT of right lane + margin
+            # Use a generous margin to allow vehicles in the right lane itself
+            if lane_result.right_lane and keep:
+                lane_x = lane_result.right_lane.get_x_at_y(vehicle_bottom_y)
+                # Vehicle center must not be way past the right lane
+                if vehicle_center_x > lane_x + 100:
+                    keep = False
+            
+            if keep:
                 filtered.append(track)
         
         return filtered

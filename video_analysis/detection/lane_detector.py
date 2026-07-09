@@ -434,15 +434,14 @@ class LaneDetector:
         x_bev = fit[0] * y_bev**2 + fit[1] * y_bev + fit[2]
         
         # Offset to inside edge of lane marking
-        # Lane markings are typically ~10-15cm wide, which in BEV is ~5-10px
-        # "Inside" means toward the driving lane:
-        #   Left lane: shift RIGHT (+x in BEV)
-        #   Right lane: shift LEFT (-x in BEV)
-        inside_offset_px = 6  # pixels in BEV space
+        # Lane markings are typically 10-15cm wide (~4 inches).
+        # We want to measure from the INSIDE edge (toward driving lane).
+        # In BEV space, offset by ~12px to get past the full paint width.
+        inside_offset_px = 12
         if side == "left":
-            x_bev = x_bev + inside_offset_px
+            x_bev = x_bev + inside_offset_px   # Shift right (toward driving lane)
         elif side == "right":
-            x_bev = x_bev - inside_offset_px
+            x_bev = x_bev - inside_offset_px   # Shift left (toward driving lane)
         
         # Filter points within image bounds
         valid = (x_bev >= 0) & (x_bev < w)

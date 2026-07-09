@@ -135,8 +135,8 @@ class FrameAnnotator:
             
             # Distance label (only for selected or all if show_distance)
             if self.show_distance and (is_selected or not self.selected_ids):
-                # Primary: longitudinal distance (to front of vehicle)
-                dist_label = f"{vd.distance_m:.1f}m fwd"
+                # Primary: longitudinal distance (to rear face of vehicle ahead)
+                dist_label = f"{vd.distance_m:.1f}m"
                 
                 # Add lane-relative lateral distances if available
                 lane_parts = []
@@ -231,33 +231,33 @@ class FrameAnnotator:
             
             x1, y1, x2, y2 = vd.bbox
             vehicle_bottom_y = y2
-            vehicle_center_x = int((x1 + x2) / 2)
+            vehicle_left_x = int(x1)     # Left edge of vehicle
+            vehicle_right_x = int(x2)    # Right edge of vehicle
             
             color = get_track_color(vd.track_id)
             
-            # Draw line from vehicle bottom-center to left lane
+            # Draw line from left lane to vehicle LEFT EDGE
             if vd.lane_offset_left_m is not None and lane_result.left_lane:
                 lane_x = int(lane_result.left_lane.get_x_at_y(float(vehicle_bottom_y)))
-                # Draw dashed line along the bottom of the bbox
                 line_y = vehicle_bottom_y - 3
                 self._draw_dashed_line(frame, (lane_x, line_y), 
-                                       (vehicle_center_x, line_y), 
+                                       (vehicle_left_x, line_y), 
                                        LANE_COLOR_LEFT, 2)
                 # Label
-                mid_x = (lane_x + vehicle_center_x) // 2
+                mid_x = (lane_x + vehicle_left_x) // 2
                 cv2.putText(frame, f"{vd.lane_offset_left_m:.1f}m",
                            (mid_x - 15, line_y - 5),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, LANE_COLOR_LEFT, 1)
             
-            # Draw line from vehicle bottom-center to right lane
+            # Draw line from vehicle RIGHT EDGE to right lane
             if vd.lane_offset_right_m is not None and lane_result.right_lane:
                 lane_x = int(lane_result.right_lane.get_x_at_y(float(vehicle_bottom_y)))
                 line_y = vehicle_bottom_y - 3
-                self._draw_dashed_line(frame, (vehicle_center_x, line_y),
+                self._draw_dashed_line(frame, (vehicle_right_x, line_y),
                                        (lane_x, line_y),
                                        LANE_COLOR_RIGHT, 2)
                 # Label
-                mid_x = (vehicle_center_x + lane_x) // 2
+                mid_x = (vehicle_right_x + lane_x) // 2
                 cv2.putText(frame, f"{vd.lane_offset_right_m:.1f}m",
                            (mid_x - 15, line_y - 5),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, LANE_COLOR_RIGHT, 1)
