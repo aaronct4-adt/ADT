@@ -210,11 +210,23 @@ class VehicleDetector:
                     # Get segmentation mask if available
                     mask = None
                     if has_masks:
-                        # Masks are at model resolution, resize to frame size
-                        mask_tensor = result.masks.data[i].cpu().numpy()
-                        mask = cv2.resize(mask_tensor, (frame_w, frame_h), 
-                                         interpolation=cv2.INTER_NEAREST)
-                        mask = (mask > 0.5).astype(np.uint8)
+                        try:
+                            # Use masks.xy for polygon at original resolution
+                            # or fall back to resizing masks.data
+                            if hasattr(result.masks, 'xy') and result.masks.xy is not None:
+                                # Create mask from polygon points (at original resolution)
+                                mask = np.zeros((frame_h, frame_w), dtype=np.uint8)
+                                poly_pts = result.masks.xy[i].astype(np.int32)
+                                if len(poly_pts) > 2:
+                                    cv2.fillPoly(mask, [poly_pts], 1)
+                            else:
+                                # Fallback: resize model-resolution mask
+                                mask_tensor = result.masks.data[i].cpu().numpy()
+                                mask = cv2.resize(mask_tensor, (frame_w, frame_h),
+                                                 interpolation=cv2.INTER_NEAREST)
+                                mask = (mask > 0.5).astype(np.uint8)
+                        except (IndexError, AttributeError):
+                            mask = None
                     
                     detections.append(Detection(
                         bbox=(int(x1), int(y1), int(x2), int(y2)),
