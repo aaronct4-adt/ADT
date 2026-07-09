@@ -129,40 +129,64 @@ class DistanceEstimator:
         # Apply temporal smoothing
         distance = self._smooth_distance(track.track_id, distance)
         
-        # Calculate lateral offset from ego center
-        center_offset_px = self._camera.bbox_center_offset(bbox)
+        # --- FOOTPRINT ESTIMATION ---
+        # The YOLO bounding box is an image-space rectangle that includes
+        # the full visible vehicle (roof to road, with perspective distortion).
+        # For plan-view measurements, we need the vehicle's ROAD-LEVEL footprint.
+        #
+        # The vehicle's actual width at road level is narrower than the full bbox
+        # because the bbox includes the roof/windshield which appears wider due
+        # to perspective. We estimate the footprint by:
+        # 1. Using the known real-world width (e.g., 1.8m for a car)
+        # 2. Computing how many pixels that width occupies at this distance
+        # 3. Centering that footprint within the bbox
+        
+        # Calculate the expected pixel width of the vehicle at this distance
+        footprint_width_px = (real_width * self._camera.focal_px[0]) / max(distance, 1.0)
+        
+        # The footprint is centered within the bbox
+        bbox_center_x = (x1 + x2) / 2.0
+        footprint_left_x = bbox_center_x - footprint_width_px / 2.0
+        footprint_right_x = bbox_center_x + footprint_width_px / 2.0
+        
+        # Use the bbox bottom (y2) as the vehicle's road contact point
+        footprint_bottom_y = float(y2)
+        
+        # Calculate lateral offset from ego center (using footprint center)
+        center_offset_px = bbox_center_x - self._camera.principal_point[0]
         lateral_offset = self._camera.lateral_offset_px_to_m(
             center_offset_px, distance
         )
         
-        # Calculate distance from lane lines to vehicle EDGE (not center)
-        # This gives plan-view clearance: how far is the vehicle body from the lane line
+        # Calculate distance from lane lines to vehicle FOOTPRINT edges
         lane_offset_left = None
         lane_offset_right = None
         
         if lane_result and lane_result.has_lanes:
-            vehicle_bottom_y = float(y2)
-            # Use the vehicle edges (not center) for clearance measurement
-            vehicle_left_edge_x = float(x1)    # Left side of vehicle
-            vehicle_right_edge_x = float(x2)   # Right side of vehicle
-            
-            # Left lane: distance from left lane line to vehicle's LEFT edge
+            # Left lane: distance from lane line to vehicle's LEFT footprint edge
             if lane_result.left_lane:
-                lane_x = lane_result.left_lane.get_x_at_y(vehicle_bottom_y)
-                # Pixel gap: vehicle left edge minus lane line x
-                px_diff = vehicle_left_edge_x - lane_x
+                lane_x = lane_result.left_lane.get_x_at_y(footprint_bottom_y)
+                # Pixel gap: vehicle footprint left edge minus lane line x
+                px_diff = footprint_left_x - lane_x
                 if px_diff > 0 and distance > 0:
                     lane_offset_left = self._camera.lateral_offset_px_to_m(px_diff, distance)
                     lane_offset_left = round(abs(lane_offset_left), 2)
             
-            # Right lane: distance from vehicle's RIGHT edge to right lane line
+            # Right lane: distance from vehicle's RIGHT footprint edge to lane line
             if lane_result.right_lane:
-                lane_x = lane_result.right_lane.get_x_at_y(vehicle_bottom_y)
-                # Pixel gap: lane line x minus vehicle right edge
-                px_diff = lane_x - vehicle_right_edge_x
+                lane_x = lane_result.right_lane.get_x_at_y(footprint_bottom_y)
+                # Pixel gap: lane line x minus vehicle footprint right edge
+                px_diff = lane_x - footprint_right_x
                 if px_diff > 0 and distance > 0:
                     lane_offset_right = self._camera.lateral_offset_px_to_m(px_diff, distance)
                     lane_offset_right = round(abs(lane_offset_right), 2)
+        
+        # Store footprint edges in the bbox field for visualization
+        # (Use the footprint, not the raw YOLO bbox, for drawing)
+        footprint_bbox = (
+            int(footprint_left_x), y1,
+            int(footprint_right_x), y2
+        )
         
         return VehicleDistance(
             track_id=track.track_id,
@@ -171,7 +195,7 @@ class DistanceEstimator:
             lateral_offset_m=round(lateral_offset, 2),
             lane_offset_left_m=lane_offset_left,
             lane_offset_right_m=lane_offset_right,
-            bbox=bbox,
+            bbox=footprint_bbox,
             confidence=track.confidence,
             method="combined",
         )

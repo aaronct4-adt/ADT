@@ -550,10 +550,8 @@ class VideoAnalysisApp:
         """
         Filter out vehicles that are on the opposite side of the freeway.
         
-        Removes any tracked vehicle whose bottom-center is:
-        - To the LEFT of the left lane line (oncoming traffic across median)
-        - OR to the RIGHT of the right lane line by a large margin
-          (vehicles on far side of multi-lane road)
+        Strictly: vehicle center must be to the RIGHT of the left lane line.
+        This removes oncoming traffic across the median.
         """
         filtered = []
         for track in tracks:
@@ -563,19 +561,17 @@ class VideoAnalysisApp:
             
             keep = True
             
-            # Check left boundary: vehicle must be RIGHT of left lane
+            # Check left boundary: vehicle center must be RIGHT of left lane
+            # No margin - strict boundary
             if lane_result.left_lane:
                 lane_x = lane_result.left_lane.get_x_at_y(vehicle_bottom_y)
-                # Vehicle center must be to the right of left lane (with margin)
-                if vehicle_center_x < lane_x - 30:
+                if vehicle_center_x < lane_x:
                     keep = False
             
-            # Check right boundary: vehicle must be LEFT of right lane + margin
-            # Use a generous margin to allow vehicles in the right lane itself
+            # Check right boundary: vehicle center must not be way past right lane
             if lane_result.right_lane and keep:
                 lane_x = lane_result.right_lane.get_x_at_y(vehicle_bottom_y)
-                # Vehicle center must not be way past the right lane
-                if vehicle_center_x > lane_x + 100:
+                if vehicle_center_x > lane_x + 50:
                     keep = False
             
             if keep:

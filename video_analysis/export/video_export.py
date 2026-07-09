@@ -169,11 +169,66 @@ class FrameAnnotator:
                      bbox: tuple, distance_m: float,
                      color: tuple, thickness: int):
         """
-        Draw a clean bounding box around a detected vehicle.
-        Just a single rectangle - no 3D effects that add clutter.
+        Draw the vehicle footprint as a perspective-correct parallelogram
+        that aligns with the road surface direction.
+        
+        The footprint follows the vanishing point perspective so it looks
+        like a plan-view outline projected onto the road plane.
+        The rear edge (bottom) is wider, the front edge (top) is narrower,
+        matching the perspective of the detected lane lines.
         """
         x1, y1, x2, y2 = bbox
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+        h, w = frame.shape[:2]
+        
+        # Vanishing point (center-top of image, where lanes converge)
+        vp_x = w // 2
+        vp_y = int(h * 0.30)
+        
+        # The bbox bottom represents the rear of the vehicle (road level)
+        # The bbox top represents the front (farther away, appears higher)
+        rear_left = (x1, y2)
+        rear_right = (x2, y2)
+        
+        # For the front edge: narrow the box toward the vanishing point
+        # The amount of narrowing depends on the vehicle height in pixels
+        # (taller bbox = more depth = more perspective convergence)
+        bbox_height = y2 - y1
+        bbox_width = x2 - x1
+        
+        # Estimate how much the front edge narrows relative to the rear
+        # Based on perspective: objects shrink as they approach the VP
+        # Use a proportional shrink based on how far y1 is from y2
+        if bbox_height > 20:
+            # Calculate shrink factor based on position relative to VP
+            rear_dist_to_vp = abs(y2 - vp_y)
+            front_dist_to_vp = abs(y1 - vp_y)
+            
+            if rear_dist_to_vp > 0:
+                shrink_ratio = front_dist_to_vp / rear_dist_to_vp
+            else:
+                shrink_ratio = 0.9
+            
+            # Front width is narrower
+            front_width = bbox_width * shrink_ratio
+            front_center_x = x1 + bbox_width / 2.0
+            
+            # Shift front center toward VP horizontally
+            center_x = (x1 + x2) / 2.0
+            vp_pull = (vp_x - center_x) * (1.0 - shrink_ratio) * 0.5
+            front_center_x = center_x + vp_pull
+            
+            front_left = (int(front_center_x - front_width / 2), y1)
+            front_right = (int(front_center_x + front_width / 2), y1)
+        else:
+            front_left = (x1, y1)
+            front_right = (x2, y1)
+        
+        # Draw the perspective footprint as a quadrilateral
+        pts = np.array([rear_left, rear_right, front_right, front_left], dtype=np.int32)
+        cv2.polylines(frame, [pts], isClosed=True, color=color, thickness=thickness)
+        
+        # Draw a thicker bottom edge to emphasize the road-level rear face
+        cv2.line(frame, rear_left, rear_right, color, thickness + 1)
     
     def _draw_vehicles_no_distance(self, frame: np.ndarray,
                                     tracks: List[TrackedObject]):
