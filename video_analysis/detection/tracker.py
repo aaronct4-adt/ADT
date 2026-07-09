@@ -23,6 +23,7 @@ class TrackedObject:
     hits: int = 1                          # Total detection count
     frames_since_seen: int = 0            # Frames since last detection
     velocity: Tuple[float, float] = (0.0, 0.0)  # Estimated (dx, dy) per frame
+    mask: Optional[np.ndarray] = None     # Segmentation mask (if available)
     
     # History for smoothing
     bbox_history: List[Tuple[int, int, int, int]] = field(default_factory=list)
@@ -242,6 +243,7 @@ class VehicleTracker:
             hits=1,
             frames_since_seen=0,
             velocity=(0.0, 0.0),
+            mask=detection.mask,
             bbox_history=[detection.bbox],
         )
         self._tracks.append(track)
@@ -266,6 +268,7 @@ class VehicleTracker:
         track.confidence = detection.confidence
         track.class_id = detection.class_id
         track.class_name = detection.class_name
+        track.mask = detection.mask
         track.hits += 1
         track.age += 1
         track.frames_since_seen = 0

@@ -7,9 +7,10 @@ Works offline once the model weights are downloaded.
 
 import os
 import sys
+import cv2
 import numpy as np
 from typing import List, Tuple, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # Import ultralytics at module level so PyInstaller can trace it
@@ -68,6 +69,7 @@ class Detection:
     confidence: float
     class_id: int                      # COCO class ID
     class_name: str                    # Human-readable name
+    mask: Optional[np.ndarray] = None  # Segmentation mask (HxW binary) if available
     
     @property
     def width(self) -> int:
@@ -91,6 +93,33 @@ class Detection:
         """Bottom center point (where vehicle meets ground)."""
         x1, y1, x2, y2 = self.bbox
         return ((x1 + x2) / 2.0, float(y2))
+    
+    def get_edges_at_y(self, y: int) -> Optional[Tuple[int, int]]:
+        """
+        Get the left and right edges of the vehicle at a given y-level
+        using the segmentation mask.
+        
+        Returns:
+            (left_x, right_x) or None if no mask or no pixels at this y
+        """
+        if self.mask is None:
+            # Fallback: use bbox with 10% inset
+            w = self.bbox[2] - self.bbox[0]
+            inset = int(w * 0.10)
+            return (self.bbox[0] + inset, self.bbox[2] - inset)
+        
+        h, w = self.mask.shape[:2]
+        if y < 0 or y >= h:
+            return None
+        
+        # Find leftmost and rightmost nonzero pixels in this row
+        row = self.mask[y, :]
+        nonzero = np.where(row > 0)[0]
+        
+        if len(nonzero) == 0:
+            return None
+        
+        return (int(nonzero[0]), int(nonzero[-1]))
 
 
 # COCO class names for vehicle types
@@ -161,6 +190,14 @@ class VehicleDetector:
             result = results[0]
             if result.boxes is not None and len(result.boxes) > 0:
                 boxes = result.boxes
+                
+                # Check if segmentation masks are available
+                has_masks = (result.masks is not None and 
+                            result.masks.data is not None and
+                            len(result.masks.data) > 0)
+                
+                frame_h, frame_w = frame.shape[:2]
+                
                 for i in range(len(boxes)):
                     # Get bbox coordinates
                     x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy().astype(int)
@@ -170,11 +207,21 @@ class VehicleDetector:
                     # Get class name
                     cls_name = VEHICLE_CLASSES.get(cls_id, self._class_names.get(cls_id, "unknown"))
                     
+                    # Get segmentation mask if available
+                    mask = None
+                    if has_masks:
+                        # Masks are at model resolution, resize to frame size
+                        mask_tensor = result.masks.data[i].cpu().numpy()
+                        mask = cv2.resize(mask_tensor, (frame_w, frame_h), 
+                                         interpolation=cv2.INTER_NEAREST)
+                        mask = (mask > 0.5).astype(np.uint8)
+                    
                     detections.append(Detection(
                         bbox=(int(x1), int(y1), int(x2), int(y2)),
                         confidence=conf,
                         class_id=cls_id,
                         class_name=cls_name,
+                        mask=mask,
                     ))
         
         return detections
