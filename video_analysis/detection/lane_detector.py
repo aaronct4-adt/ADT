@@ -1,11 +1,12 @@
 """
-Lane line detection using a hybrid approach.
+Lane line detection using bird's-eye view perspective transform.
 
-Combines classical image processing (Canny + Hough) with
-RANSAC-based fitting for robust lane detection.
+Uses a perspective warp to create a top-down view of the road,
+where lane lines appear as vertical features that are much easier
+to detect reliably. Then projects the detected lines back to the
+original camera view.
 
-Works best on road scenes; may not produce results in
-indoor/garage/test environments.
+Much more robust than direct Hough detection on the perspective view.
 """
 
 import cv2
@@ -74,49 +75,71 @@ class LaneDetectionResult:
 
 class LaneDetector:
     """
-    Robust lane line detector using classical CV + RANSAC.
+    Lane detector using bird's-eye view (BEV) perspective transform.
     
     Pipeline:
-    1. Color space conversion + thresholding (white/yellow lines)
-    2. Canny edge detection
-    3. Region of Interest masking
-    4. Hough line transform
-    5. Line filtering and classification (left/right)
-    6. Polynomial fitting with RANSAC-like outlier rejection
+    1. Define source/destination points for perspective transform
+    2. Warp frame to bird's-eye view
+    3. Apply color thresholding (white + yellow lines)
+    4. Use sliding window or histogram peaks to find lane pixels
+    5. Fit polynomial to lane pixels in BEV space
+    6. Project fitted lane back to original camera view
+    
+    This is much more robust than direct Hough line detection because:
+    - Lane lines appear vertical in BEV (easy to find)
+    - Dashed lines are naturally connected in the vertical direction
+    - Curvature is easier to fit in BEV
     """
     
-    def __init__(self, 
-                 roi_top_fraction: float = 0.45,
-                 canny_low: int = 50,
-                 canny_high: int = 150,
-                 hough_threshold: int = 25,
-                 hough_min_line_length: int = 30,
-                 hough_max_line_gap: int = 120,
-                 min_slope: float = 0.4,
-                 temporal_smoothing: int = 5):
+    def __init__(self, temporal_smoothing: int = 5):
         """
         Args:
-            roi_top_fraction: Top of ROI as fraction of image height (0.5 = bottom half)
-            canny_low: Lower Canny threshold
-            canny_high: Upper Canny threshold
-            hough_threshold: Hough accumulator threshold
-            hough_min_line_length: Minimum line segment length
-            hough_max_line_gap: Maximum gap between line segments
-            min_slope: Minimum absolute slope for a line to be considered a lane
             temporal_smoothing: Number of frames for temporal averaging
         """
-        self._roi_top = roi_top_fraction
-        self._canny_low = canny_low
-        self._canny_high = canny_high
-        self._hough_threshold = hough_threshold
-        self._hough_min_length = hough_min_line_length
-        self._hough_max_gap = hough_max_line_gap
-        self._min_slope = min_slope
         self._smoothing = temporal_smoothing
         
         # History for temporal smoothing
-        self._left_history: List[Tuple[float, float, float]] = []
-        self._right_history: List[Tuple[float, float, float]] = []
+        self._left_history: List[np.ndarray] = []
+        self._right_history: List[np.ndarray] = []
+        
+        # Perspective transform matrices (computed once per resolution)
+        self._M = None
+        self._M_inv = None
+        self._warp_size = None
+        self._src_pts = None
+        self._dst_pts = None
+        self._last_resolution = None
+    
+    def _setup_perspective(self, h: int, w: int):
+        """Compute perspective transform matrices for this resolution."""
+        if self._last_resolution == (h, w):
+            return
+        
+        self._last_resolution = (h, w)
+        
+        # Source points: trapezoidal region on the road
+        # These define the "road surface" region in the camera view
+        # Tuned for a wide-angle forward-facing camera
+        src = np.float32([
+            [w * 0.15, h * 0.95],   # Bottom-left
+            [w * 0.40, h * 0.55],   # Top-left
+            [w * 0.60, h * 0.55],   # Top-right
+            [w * 0.85, h * 0.95],   # Bottom-right
+        ])
+        
+        # Destination points: rectangle (bird's eye view)
+        dst = np.float32([
+            [w * 0.2, h],       # Bottom-left
+            [w * 0.2, 0],       # Top-left
+            [w * 0.8, 0],       # Top-right
+            [w * 0.8, h],       # Bottom-right
+        ])
+        
+        self._src_pts = src
+        self._dst_pts = dst
+        self._M = cv2.getPerspectiveTransform(src, dst)
+        self._M_inv = cv2.getPerspectiveTransform(dst, src)
+        self._warp_size = (w, h)
     
     def detect(self, frame: np.ndarray) -> LaneDetectionResult:
         """
@@ -129,237 +152,251 @@ class LaneDetector:
             LaneDetectionResult with detected lanes
         """
         h, w = frame.shape[:2]
+        self._setup_perspective(h, w)
         
-        # Step 1: Pre-processing
-        processed = self._preprocess(frame)
+        # Step 1: Create binary mask of lane-like pixels
+        binary = self._threshold_frame(frame)
         
-        # Step 2: Edge detection
-        edges = cv2.Canny(processed, self._canny_low, self._canny_high)
+        # Step 2: Warp to bird's-eye view
+        bev = cv2.warpPerspective(binary, self._M, self._warp_size)
         
-        # Step 3: ROI mask
-        roi_mask = self._create_roi_mask(h, w)
-        masked_edges = cv2.bitwise_and(edges, edges, mask=roi_mask)
+        # Step 3: Find lane pixels using histogram + sliding windows
+        left_pixels, right_pixels = self._find_lane_pixels(bev)
         
-        # Step 4: Hough line detection
-        lines = cv2.HoughLinesP(
-            masked_edges,
-            rho=1,
-            theta=np.pi / 180,
-            threshold=self._hough_threshold,
-            minLineLength=self._hough_min_length,
-            maxLineGap=self._hough_max_gap,
-        )
+        # Step 4: Fit polynomials to lane pixels (in BEV space)
+        left_fit = self._fit_polynomial(left_pixels, h)
+        right_fit = self._fit_polynomial(right_pixels, h)
         
-        if lines is None:
-            return LaneDetectionResult(roi_mask=roi_mask)
+        # Step 5: Apply temporal smoothing
+        left_fit = self._smooth_fit(left_fit, self._left_history)
+        right_fit = self._smooth_fit(right_fit, self._right_history)
         
-        # Step 5: Classify lines as left or right
-        left_segments = []
-        right_segments = []
-        raw_lines = []
-        
-        center_x = w / 2.0
-        
-        for line in lines:
-            # HoughLinesP returns shape (N, 1, 4) or (N, 4)
-            if line.ndim == 2:
-                x1, y1, x2, y2 = line[0]
-            else:
-                x1, y1, x2, y2 = line
-            raw_lines.append((int(x1), int(y1), int(x2), int(y2)))
-            
-            # Calculate slope (in image coords, y increases downward)
-            if x2 == x1:
-                continue
-            
-            slope = (y2 - y1) / (x2 - x1)
-            
-            # Filter by minimum slope
-            if abs(slope) < self._min_slope:
-                continue
-            
-            # Classify: negative slope = left lane, positive slope = right lane
-            # (because y increases downward in image coords)
-            midpoint_x = (x1 + x2) / 2.0
-            
-            if slope < 0 and midpoint_x < center_x:
-                left_segments.append((x1, y1, x2, y2))
-            elif slope > 0 and midpoint_x > center_x:
-                right_segments.append((x1, y1, x2, y2))
-        
-        # Step 6: Fit lane lines
-        left_lane = self._fit_lane(left_segments, h, w, "left")
-        right_lane = self._fit_lane(right_segments, h, w, "right")
-        
-        # Apply temporal smoothing
-        if left_lane:
-            self._left_history.append(left_lane.coefficients)
-            if len(self._left_history) > self._smoothing:
-                self._left_history.pop(0)
-            left_lane = self._smooth_lane(self._left_history, h, w, "left")
-        
-        if right_lane:
-            self._right_history.append(right_lane.coefficients)
-            if len(self._right_history) > self._smoothing:
-                self._right_history.pop(0)
-            right_lane = self._smooth_lane(self._right_history, h, w, "right")
+        # Step 6: Generate lane line points and project back to camera view
+        left_lane = self._create_lane_line(left_fit, h, w, "left")
+        right_lane = self._create_lane_line(right_fit, h, w, "right")
         
         return LaneDetectionResult(
             left_lane=left_lane,
             right_lane=right_lane,
-            raw_lines=raw_lines,
-            roi_mask=roi_mask,
         )
     
-    def _preprocess(self, frame: np.ndarray) -> np.ndarray:
+    def _threshold_frame(self, frame: np.ndarray) -> np.ndarray:
         """
-        Pre-process frame for lane detection.
-        
-        Combines:
-        - Grayscale conversion
-        - White line detection (high brightness)
-        - Yellow line detection (HSV filtering)
-        - Gaussian blur
+        Create a binary mask highlighting lane line pixels.
+        Uses multiple color spaces for robustness.
         """
-        # Grayscale
+        # Convert to different color spaces
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
         
-        # White line mask - use adaptive or lower threshold for highway markings
-        # In overcast conditions, lane markings can be 140-200 brightness
-        _, white_mask = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+        # White line detection: high lightness in HLS
+        l_channel = hls[:, :, 1]
+        _, white_mask = cv2.threshold(l_channel, 160, 255, cv2.THRESH_BINARY)
         
-        # Also try adaptive threshold for markings in shadow
-        adaptive = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                          cv2.THRESH_BINARY, 15, -10)
-        white_mask = cv2.bitwise_or(white_mask, adaptive)
+        # Also use Sobel gradient on lightness (catches edges of lines)
+        sobel_x = cv2.Sobel(l_channel, cv2.CV_64F, 1, 0, ksize=3)
+        abs_sobel = np.absolute(sobel_x)
+        if abs_sobel.max() > 0:
+            scaled_sobel = np.uint8(255 * abs_sobel / abs_sobel.max())
+        else:
+            scaled_sobel = np.zeros_like(l_channel)
+        _, sobel_mask = cv2.threshold(scaled_sobel, 30, 255, cv2.THRESH_BINARY)
         
-        # Yellow line mask (HSV)
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        yellow_lower = np.array([15, 50, 100])
-        yellow_upper = np.array([40, 255, 255])
-        yellow_mask = cv2.inRange(hsv, yellow_lower, yellow_upper)
+        # Yellow line detection: saturation channel
+        s_channel = hls[:, :, 2]
+        _, yellow_mask = cv2.threshold(s_channel, 80, 255, cv2.THRESH_BINARY)
         
-        # Combine masks
-        combined = cv2.bitwise_or(white_mask, yellow_mask)
+        # Combine all masks
+        combined = cv2.bitwise_or(white_mask, sobel_mask)
+        combined = cv2.bitwise_or(combined, yellow_mask)
         
-        # Morphological cleanup - close small gaps in dashed lines
-        kernel = np.ones((3, 3), np.uint8)
-        combined = cv2.dilate(combined, kernel, iterations=1)
-        combined = cv2.erode(combined, kernel, iterations=1)
-        
-        # Final blur
-        result = cv2.GaussianBlur(combined, (5, 5), 0)
-        
-        return result
+        return combined
     
-    def _create_roi_mask(self, h: int, w: int) -> np.ndarray:
-        """Create a trapezoidal ROI mask for the road area."""
-        mask = np.zeros((h, w), dtype=np.uint8)
+    def _find_lane_pixels(self, bev: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Find lane line pixels in the bird's-eye view using
+        histogram peak + sliding window approach.
         
-        # Trapezoidal region covering the road
-        # Wide-angle lenses (108° HFOV) show lanes extending further to the sides
-        top_y = int(h * self._roi_top)
+        Returns:
+            (left_pixels, right_pixels) each as Nx2 arrays of (x, y) coords
+        """
+        h, w = bev.shape[:2]
         
-        # Wide ROI to catch lanes at the edges of wide-angle view
-        vertices = np.array([[
-            (int(w * 0.0), h),            # Bottom-left (full width)
-            (int(w * 0.2), top_y),        # Top-left (wider)
-            (int(w * 0.8), top_y),        # Top-right (wider)
-            (int(w * 1.0), h),            # Bottom-right (full width)
-        ]], dtype=np.int32)
+        # Histogram of bottom half to find lane starting positions
+        bottom_half = bev[h // 2:, :]
+        histogram = np.sum(bottom_half, axis=0)
         
-        cv2.fillPoly(mask, vertices, 255)
-        return mask
+        midpoint = w // 2
+        left_base = np.argmax(histogram[:midpoint])
+        right_base = np.argmax(histogram[midpoint:]) + midpoint
+        
+        # Sliding window parameters
+        n_windows = 9
+        window_height = h // n_windows
+        margin = 50  # Width of window
+        min_pixels = 30  # Minimum pixels to recenter window
+        
+        # Get all nonzero pixel positions
+        nonzero = bev.nonzero()
+        nonzero_y = nonzero[0]
+        nonzero_x = nonzero[1]
+        
+        # Track window positions
+        left_current = left_base
+        right_current = right_base
+        
+        left_lane_inds = []
+        right_lane_inds = []
+        
+        for window in range(n_windows):
+            # Window boundaries
+            win_y_low = h - (window + 1) * window_height
+            win_y_high = h - window * window_height
+            
+            win_x_left_low = left_current - margin
+            win_x_left_high = left_current + margin
+            win_x_right_low = right_current - margin
+            win_x_right_high = right_current + margin
+            
+            # Find pixels in window
+            good_left = (
+                (nonzero_y >= win_y_low) & (nonzero_y < win_y_high) &
+                (nonzero_x >= win_x_left_low) & (nonzero_x < win_x_left_high)
+            ).nonzero()[0]
+            
+            good_right = (
+                (nonzero_y >= win_y_low) & (nonzero_y < win_y_high) &
+                (nonzero_x >= win_x_right_low) & (nonzero_x < win_x_right_high)
+            ).nonzero()[0]
+            
+            left_lane_inds.append(good_left)
+            right_lane_inds.append(good_right)
+            
+            # Recenter window if enough pixels found
+            if len(good_left) > min_pixels:
+                left_current = int(np.mean(nonzero_x[good_left]))
+            if len(good_right) > min_pixels:
+                right_current = int(np.mean(nonzero_x[good_right]))
+        
+        # Concatenate indices
+        left_lane_inds = np.concatenate(left_lane_inds) if left_lane_inds else np.array([])
+        right_lane_inds = np.concatenate(right_lane_inds) if right_lane_inds else np.array([])
+        
+        # Extract pixel positions
+        if len(left_lane_inds) > 0:
+            left_pixels = np.column_stack((nonzero_x[left_lane_inds], 
+                                           nonzero_y[left_lane_inds]))
+        else:
+            left_pixels = np.array([]).reshape(0, 2)
+        
+        if len(right_lane_inds) > 0:
+            right_pixels = np.column_stack((nonzero_x[right_lane_inds], 
+                                            nonzero_y[right_lane_inds]))
+        else:
+            right_pixels = np.array([]).reshape(0, 2)
+        
+        return left_pixels, right_pixels
     
-    def _fit_lane(self, segments: List[Tuple[int, int, int, int]], 
-                  h: int, w: int, side: str) -> Optional[LaneLine]:
-        """Fit a straight line to lane segments."""
-        if len(segments) < 2:
+    def _fit_polynomial(self, pixels: np.ndarray, h: int) -> Optional[np.ndarray]:
+        """
+        Fit a 2nd-degree polynomial to lane pixels.
+        
+        Args:
+            pixels: Nx2 array of (x, y) pixel positions in BEV
+            h: Image height
+            
+        Returns:
+            Polynomial coefficients [a, b, c] for x = a*y^2 + b*y + c
+            or None if not enough pixels
+        """
+        if len(pixels) < 50:
             return None
         
-        # Collect all points from segments
-        all_x = []
-        all_y = []
-        
-        for x1, y1, x2, y2 in segments:
-            all_x.extend([x1, x2])
-            all_y.extend([y1, y2])
-        
-        all_x = np.array(all_x, dtype=np.float64)
-        all_y = np.array(all_y, dtype=np.float64)
-        
-        if len(all_x) < 3:
-            return None
+        x = pixels[:, 0]
+        y = pixels[:, 1]
         
         try:
-            # Fit 1st degree polynomial (straight line): x = a*y + b
-            # Straight lines are appropriate for highway lanes in the near field
-            coeffs = np.polyfit(all_y, all_x, 1)
-            
-            # Store as (0, a, b) to maintain the 3-coefficient format
-            # x = 0*y^2 + a*y + b
-            full_coeffs = (0.0, float(coeffs[0]), float(coeffs[1]))
-            
-            # Generate points along the line
-            y_range = np.linspace(int(h * self._roi_top), h - 1, 30)
-            x_range = np.polyval(coeffs, y_range)
-            
-            # Filter points within image bounds
-            valid = (x_range >= 0) & (x_range < w)
-            y_range = y_range[valid]
-            x_range = x_range[valid]
-            
-            if len(x_range) < 2:
-                return None
-            
-            points = [(int(x), int(y)) for x, y in zip(x_range, y_range)]
-            
-            # Get x at bottom of image
-            x_at_bottom = float(np.polyval(coeffs, h - 1))
-            
-            return LaneLine(
-                coefficients=full_coeffs,
-                points=points,
-                side=side,
-                confidence=min(len(segments) / 10.0, 1.0),
-                x_at_bottom=x_at_bottom,
-            )
+            # Fit x = f(y) which handles vertical/near-vertical lines well
+            coeffs = np.polyfit(y, x, 2)
+            return coeffs
         except (np.linalg.LinAlgError, ValueError):
             return None
     
-    def _smooth_lane(self, history: List[Tuple[float, float, float]],
-                     h: int, w: int, side: str) -> Optional[LaneLine]:
-        """Average lane coefficients over recent frames."""
+    def _smooth_fit(self, current_fit: Optional[np.ndarray],
+                    history: List[np.ndarray]) -> Optional[np.ndarray]:
+        """Apply temporal smoothing to polynomial fit."""
+        if current_fit is not None:
+            history.append(current_fit)
+            if len(history) > self._smoothing:
+                history.pop(0)
+        
         if not history:
             return None
         
-        # Weighted average (recent frames weighted more)
+        # Weighted average of recent fits
         weights = np.linspace(0.5, 1.0, len(history))
         weights /= weights.sum()
         
-        avg_coeffs = np.zeros(3)
-        for weight, coeffs in zip(weights, history):
-            avg_coeffs += weight * np.array(coeffs)
+        avg_fit = np.zeros(3)
+        for w, fit in zip(weights, history):
+            avg_fit += w * fit
         
-        # Generate smoothed points using linear part only (coeffs[1]*y + coeffs[2])
-        y_range = np.linspace(int(h * self._roi_top), h - 1, 30)
-        x_range = avg_coeffs[0] * y_range * y_range + avg_coeffs[1] * y_range + avg_coeffs[2]
-        
-        valid = (x_range >= 0) & (x_range < w)
-        y_range = y_range[valid]
-        x_range = x_range[valid]
-        
-        if len(x_range) < 2:
+        return avg_fit
+    
+    def _create_lane_line(self, fit: Optional[np.ndarray], 
+                          h: int, w: int, side: str) -> Optional[LaneLine]:
+        """
+        Create a LaneLine from BEV polynomial fit, projected back to camera view.
+        """
+        if fit is None:
             return None
         
-        points = [(int(x), int(y)) for x, y in zip(x_range, y_range)]
-        x_at_bottom = float(avg_coeffs[0] * (h-1)**2 + avg_coeffs[1] * (h-1) + avg_coeffs[2])
+        # Generate points in BEV space
+        y_bev = np.linspace(0, h - 1, 40)
+        x_bev = fit[0] * y_bev**2 + fit[1] * y_bev + fit[2]
+        
+        # Filter points within image bounds
+        valid = (x_bev >= 0) & (x_bev < w)
+        x_bev = x_bev[valid]
+        y_bev = y_bev[valid]
+        
+        if len(x_bev) < 2:
+            return None
+        
+        # Project BEV points back to camera view
+        bev_points = np.float32(np.column_stack((x_bev, y_bev)).reshape(-1, 1, 2))
+        camera_points = cv2.perspectiveTransform(bev_points, self._M_inv)
+        camera_points = camera_points.reshape(-1, 2)
+        
+        # Filter camera points within image bounds
+        valid_cam = (
+            (camera_points[:, 0] >= 0) & (camera_points[:, 0] < w) &
+            (camera_points[:, 1] >= 0) & (camera_points[:, 1] < h)
+        )
+        camera_points = camera_points[valid_cam]
+        
+        if len(camera_points) < 2:
+            return None
+        
+        points = [(int(p[0]), int(p[1])) for p in camera_points]
+        
+        # Fit a polynomial in camera space for get_x_at_y functionality
+        cam_x = camera_points[:, 0]
+        cam_y = camera_points[:, 1]
+        
+        try:
+            cam_coeffs = np.polyfit(cam_y, cam_x, 2)
+        except (np.linalg.LinAlgError, ValueError):
+            cam_coeffs = np.polyfit(cam_y, cam_x, 1)
+            cam_coeffs = np.array([0.0, cam_coeffs[0], cam_coeffs[1]])
+        
+        x_at_bottom = float(cam_coeffs[0] * (h-1)**2 + cam_coeffs[1] * (h-1) + cam_coeffs[2])
         
         return LaneLine(
-            coefficients=(float(avg_coeffs[0]), float(avg_coeffs[1]), float(avg_coeffs[2])),
+            coefficients=(float(cam_coeffs[0]), float(cam_coeffs[1]), float(cam_coeffs[2])),
             points=points,
             side=side,
-            confidence=min(len(history) / self._smoothing, 1.0),
+            confidence=min(len(camera_points) / 20.0, 1.0),
             x_at_bottom=x_at_bottom,
         )
     

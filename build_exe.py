@@ -34,12 +34,17 @@ from pathlib import Path
 def build():
     """Run PyInstaller to create the exe."""
 
-    # Ensure yolov8n.pt exists
-    model_path = Path("yolov8n.pt")
+    # Ensure yolov8n.pt exists (or yolo11x.pt for max accuracy)
+    model_path = Path("yolo11x.pt")
     if not model_path.exists():
-        print("Downloading YOLOv8 model...")
+        # Fall back to yolov8n if yolo11x not available
+        model_path = Path("yolov8n.pt")
+    
+    if not model_path.exists():
+        print("Downloading YOLO model...")
         from ultralytics import YOLO
-        YOLO("yolov8n.pt")
+        YOLO("yolo11x.pt")
+        model_path = Path("yolo11x.pt")
 
     # PyInstaller command
     cmd = [
@@ -50,7 +55,7 @@ def build():
         "--noconfirm",
 
         # Bundle the YOLOv8 model weights next to the exe
-        "--add-data", f"yolov8n.pt{os.pathsep}.",
+        "--add-data", f"{model_path}{os.pathsep}.",
 
         # Runtime hook to configure ultralytics paths in frozen env
         "--runtime-hook", "runtime_hook.py",

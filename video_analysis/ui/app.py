@@ -796,9 +796,10 @@ class VideoAnalysisApp:
         from ..core.config import DistanceConfig
         
         try:
-            # Initialize models
+            # Initialize models - use YOLO11x for maximum accuracy
+            # (larger model, slower but much more precise)
             detector = VehicleDetector(
-                model_path="yolov8n.pt",
+                model_path="yolo11x.pt",
                 confidence_threshold=0.5,
             )
             tracker = VehicleTracker(max_age=30, min_hits=3, iou_threshold=0.4)
