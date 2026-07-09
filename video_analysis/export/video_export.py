@@ -169,56 +169,46 @@ class FrameAnnotator:
                      bbox: tuple, distance_m: float,
                      color: tuple, thickness: int):
         """
-        Draw a 3D perspective cuboid around a detected vehicle.
+        Draw a bounding box with a subtle depth indicator.
         
-        The front face is the 2D bounding box. The rear face is offset
-        upward and inward (toward horizon), creating depth appearance.
-        Depth amount scales inversely with distance.
+        Draws the main 2D rectangle plus a small trapezoidal "roof" 
+        above the top edge to suggest the vehicle's 3D extent.
         """
         x1, y1, x2, y2 = bbox
         h, w = frame.shape[:2]
         
-        # Draw the front face (main 2D bbox)
+        # Draw the main bounding box (single rectangle)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
         
-        # Calculate depth offset (smaller for farther vehicles)
-        bbox_height = y2 - y1
+        # Skip depth indicator for very small detections
         bbox_width = x2 - x1
-        
-        # Skip 3D effect for very small or far-away detections
-        if bbox_width < 30 or bbox_height < 30:
+        bbox_height = y2 - y1
+        if bbox_width < 40 or bbox_height < 40:
             return
         
-        # Depth lines go toward the vanishing point (image center, above bbox)
+        # Draw a small "roof" trapezoid above the box to indicate depth
+        # The roof narrows toward the vanishing point
+        roof_height = max(4, int(bbox_height * 0.08))
+        
+        # Vanishing point direction (toward center of image)
         vp_x = w // 2
-        vp_y = int(h * 0.3)
+        inset = max(2, int(bbox_width * 0.05))  # How much the roof narrows
         
-        # Offset amount: proportional to bbox size but capped
-        offset = max(5, min(int(bbox_width * 0.15), 25))
+        # Determine which side narrows based on position relative to VP
+        if (x1 + x2) / 2 < vp_x:
+            # Vehicle is left of center - right side narrows
+            roof_tl = (x1, y1 - roof_height)
+            roof_tr = (x2 - inset, y1 - roof_height)
+        else:
+            # Vehicle is right of center - left side narrows
+            roof_tl = (x1 + inset, y1 - roof_height)
+            roof_tr = (x2, y1 - roof_height)
         
-        # Direction toward vanishing point for each corner
-        def shrink_toward_vp(px, py):
-            dx = vp_x - px
-            dy = vp_y - py
-            dist = max(1.0, (dx*dx + dy*dy) ** 0.5)
-            return (int(px + dx * offset / dist), int(py + dy * offset / dist))
-        
-        # Rear corners (shifted toward VP)
-        r_tl = shrink_toward_vp(x1, y1)
-        r_tr = shrink_toward_vp(x2, y1)
-        r_bl = shrink_toward_vp(x1, y2)
-        r_br = shrink_toward_vp(x2, y2)
-        
-        # Draw rear face (thinner)
+        # Draw roof lines
         thin = max(1, thickness - 1)
-        cv2.line(frame, r_tl, r_tr, color, thin)
-        cv2.line(frame, r_tr, r_br, color, thin)
-        cv2.line(frame, r_br, r_bl, color, thin)
-        cv2.line(frame, r_bl, r_tl, color, thin)
-        
-        # Draw only top connecting edges (gives roof/depth impression)
-        cv2.line(frame, (x1, y1), r_tl, color, thin)
-        cv2.line(frame, (x2, y1), r_tr, color, thin)
+        cv2.line(frame, (x1, y1), roof_tl, color, thin)
+        cv2.line(frame, (x2, y1), roof_tr, color, thin)
+        cv2.line(frame, roof_tl, roof_tr, color, thin)
     
     def _draw_vehicles_no_distance(self, frame: np.ndarray,
                                     tracks: List[TrackedObject]):

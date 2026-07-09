@@ -86,13 +86,13 @@ class LaneDetector:
     """
     
     def __init__(self, 
-                 roi_top_fraction: float = 0.5,
-                 canny_low: int = 50,
-                 canny_high: int = 150,
-                 hough_threshold: int = 30,
-                 hough_min_line_length: int = 40,
-                 hough_max_line_gap: int = 100,
-                 min_slope: float = 0.3,
+                 roi_top_fraction: float = 0.45,
+                 canny_low: int = 40,
+                 canny_high: int = 120,
+                 hough_threshold: int = 20,
+                 hough_min_line_length: int = 20,
+                 hough_max_line_gap: int = 150,
+                 min_slope: float = 0.2,
                  temporal_smoothing: int = 5):
         """
         Args:
@@ -224,24 +224,31 @@ class LaneDetector:
         # Grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # White line mask (high brightness)
-        _, white_mask = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
+        # White line mask - use adaptive or lower threshold for highway markings
+        # In overcast conditions, lane markings can be 140-200 brightness
+        _, white_mask = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+        
+        # Also try adaptive threshold for markings in shadow
+        adaptive = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                          cv2.THRESH_BINARY, 15, -10)
+        white_mask = cv2.bitwise_or(white_mask, adaptive)
         
         # Yellow line mask (HSV)
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        yellow_lower = np.array([15, 80, 100])
-        yellow_upper = np.array([35, 255, 255])
+        yellow_lower = np.array([15, 50, 100])
+        yellow_upper = np.array([40, 255, 255])
         yellow_mask = cv2.inRange(hsv, yellow_lower, yellow_upper)
         
         # Combine masks
         combined = cv2.bitwise_or(white_mask, yellow_mask)
         
-        # Also add edges from the grayscale (for less prominent markings)
-        blurred_gray = cv2.GaussianBlur(gray, (5, 5), 0)
-        combined_with_gray = cv2.addWeighted(combined, 0.7, blurred_gray, 0.3, 0)
+        # Morphological cleanup - close small gaps in dashed lines
+        kernel = np.ones((3, 3), np.uint8)
+        combined = cv2.dilate(combined, kernel, iterations=1)
+        combined = cv2.erode(combined, kernel, iterations=1)
         
         # Final blur
-        result = cv2.GaussianBlur(combined_with_gray, (5, 5), 0)
+        result = cv2.GaussianBlur(combined, (5, 5), 0)
         
         return result
     
@@ -250,14 +257,15 @@ class LaneDetector:
         mask = np.zeros((h, w), dtype=np.uint8)
         
         # Trapezoidal region covering the road
+        # Wide-angle lenses (108° HFOV) show lanes extending further to the sides
         top_y = int(h * self._roi_top)
         
-        # Wider at bottom, narrower at top
+        # Wide ROI to catch lanes at the edges of wide-angle view
         vertices = np.array([[
-            (int(w * 0.05), h),           # Bottom-left
-            (int(w * 0.35), top_y),       # Top-left
-            (int(w * 0.65), top_y),       # Top-right
-            (int(w * 0.95), h),           # Bottom-right
+            (int(w * 0.0), h),            # Bottom-left (full width)
+            (int(w * 0.2), top_y),        # Top-left (wider)
+            (int(w * 0.8), top_y),        # Top-right (wider)
+            (int(w * 1.0), h),            # Bottom-right (full width)
         ]], dtype=np.int32)
         
         cv2.fillPoly(mask, vertices, 255)
