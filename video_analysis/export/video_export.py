@@ -169,46 +169,11 @@ class FrameAnnotator:
                      bbox: tuple, distance_m: float,
                      color: tuple, thickness: int):
         """
-        Draw a bounding box with a subtle depth indicator.
-        
-        Draws the main 2D rectangle plus a small trapezoidal "roof" 
-        above the top edge to suggest the vehicle's 3D extent.
+        Draw a clean bounding box around a detected vehicle.
+        Just a single rectangle - no 3D effects that add clutter.
         """
         x1, y1, x2, y2 = bbox
-        h, w = frame.shape[:2]
-        
-        # Draw the main bounding box (single rectangle)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
-        
-        # Skip depth indicator for very small detections
-        bbox_width = x2 - x1
-        bbox_height = y2 - y1
-        if bbox_width < 40 or bbox_height < 40:
-            return
-        
-        # Draw a small "roof" trapezoid above the box to indicate depth
-        # The roof narrows toward the vanishing point
-        roof_height = max(4, int(bbox_height * 0.08))
-        
-        # Vanishing point direction (toward center of image)
-        vp_x = w // 2
-        inset = max(2, int(bbox_width * 0.05))  # How much the roof narrows
-        
-        # Determine which side narrows based on position relative to VP
-        if (x1 + x2) / 2 < vp_x:
-            # Vehicle is left of center - right side narrows
-            roof_tl = (x1, y1 - roof_height)
-            roof_tr = (x2 - inset, y1 - roof_height)
-        else:
-            # Vehicle is right of center - left side narrows
-            roof_tl = (x1 + inset, y1 - roof_height)
-            roof_tr = (x2, y1 - roof_height)
-        
-        # Draw roof lines
-        thin = max(1, thickness - 1)
-        cv2.line(frame, (x1, y1), roof_tl, color, thin)
-        cv2.line(frame, (x2, y1), roof_tr, color, thin)
-        cv2.line(frame, roof_tl, roof_tr, color, thin)
     
     def _draw_vehicles_no_distance(self, frame: np.ndarray,
                                     tracks: List[TrackedObject]):
@@ -237,17 +202,17 @@ class FrameAnnotator:
         if lane_result.left_lane:
             pts = np.array(lane_result.left_lane.points, dtype=np.int32)
             if len(pts) > 1:
-                cv2.polylines(frame, [pts], False, LANE_COLOR_LEFT, 3)
+                cv2.polylines(frame, [pts], False, LANE_COLOR_LEFT, 2)
         
         if lane_result.right_lane:
             pts = np.array(lane_result.right_lane.points, dtype=np.int32)
             if len(pts) > 1:
-                cv2.polylines(frame, [pts], False, LANE_COLOR_RIGHT, 3)
+                cv2.polylines(frame, [pts], False, LANE_COLOR_RIGHT, 2)
         
         for center_line in lane_result.center_lines:
             pts = np.array(center_line.points, dtype=np.int32)
             if len(pts) > 1:
-                cv2.polylines(frame, [pts], False, LANE_COLOR_CENTER, 2)
+                cv2.polylines(frame, [pts], False, LANE_COLOR_CENTER, 1)
     
     def _draw_lane_distance_lines(self, frame: np.ndarray, 
                                    fd: FrameDistances,

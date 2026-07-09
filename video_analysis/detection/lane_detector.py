@@ -87,12 +87,12 @@ class LaneDetector:
     
     def __init__(self, 
                  roi_top_fraction: float = 0.45,
-                 canny_low: int = 40,
-                 canny_high: int = 120,
-                 hough_threshold: int = 20,
-                 hough_min_line_length: int = 20,
-                 hough_max_line_gap: int = 150,
-                 min_slope: float = 0.2,
+                 canny_low: int = 50,
+                 canny_high: int = 150,
+                 hough_threshold: int = 25,
+                 hough_min_line_length: int = 30,
+                 hough_max_line_gap: int = 120,
+                 min_slope: float = 0.4,
                  temporal_smoothing: int = 5):
         """
         Args:
@@ -273,7 +273,7 @@ class LaneDetector:
     
     def _fit_lane(self, segments: List[Tuple[int, int, int, int]], 
                   h: int, w: int, side: str) -> Optional[LaneLine]:
-        """Fit a polynomial to line segments."""
+        """Fit a straight line to lane segments."""
         if len(segments) < 2:
             return None
         
@@ -292,12 +292,16 @@ class LaneDetector:
             return None
         
         try:
-            # Fit 2nd degree polynomial: x = f(y)
-            # This handles near-vertical lines better than y = f(x)
-            coeffs = np.polyfit(all_y, all_x, 2)
+            # Fit 1st degree polynomial (straight line): x = a*y + b
+            # Straight lines are appropriate for highway lanes in the near field
+            coeffs = np.polyfit(all_y, all_x, 1)
+            
+            # Store as (0, a, b) to maintain the 3-coefficient format
+            # x = 0*y^2 + a*y + b
+            full_coeffs = (0.0, float(coeffs[0]), float(coeffs[1]))
             
             # Generate points along the line
-            y_range = np.linspace(int(h * self._roi_top), h - 1, 50)
+            y_range = np.linspace(int(h * self._roi_top), h - 1, 30)
             x_range = np.polyval(coeffs, y_range)
             
             # Filter points within image bounds
@@ -314,7 +318,7 @@ class LaneDetector:
             x_at_bottom = float(np.polyval(coeffs, h - 1))
             
             return LaneLine(
-                coefficients=(float(coeffs[0]), float(coeffs[1]), float(coeffs[2])),
+                coefficients=full_coeffs,
                 points=points,
                 side=side,
                 confidence=min(len(segments) / 10.0, 1.0),
@@ -337,9 +341,9 @@ class LaneDetector:
         for weight, coeffs in zip(weights, history):
             avg_coeffs += weight * np.array(coeffs)
         
-        # Generate smoothed points
-        y_range = np.linspace(int(h * self._roi_top), h - 1, 50)
-        x_range = np.polyval(avg_coeffs, y_range)
+        # Generate smoothed points using linear part only (coeffs[1]*y + coeffs[2])
+        y_range = np.linspace(int(h * self._roi_top), h - 1, 30)
+        x_range = avg_coeffs[0] * y_range * y_range + avg_coeffs[1] * y_range + avg_coeffs[2]
         
         valid = (x_range >= 0) & (x_range < w)
         y_range = y_range[valid]
@@ -349,7 +353,7 @@ class LaneDetector:
             return None
         
         points = [(int(x), int(y)) for x, y in zip(x_range, y_range)]
-        x_at_bottom = float(np.polyval(avg_coeffs, h - 1))
+        x_at_bottom = float(avg_coeffs[0] * (h-1)**2 + avg_coeffs[1] * (h-1) + avg_coeffs[2])
         
         return LaneLine(
             coefficients=(float(avg_coeffs[0]), float(avg_coeffs[1]), float(avg_coeffs[2])),
