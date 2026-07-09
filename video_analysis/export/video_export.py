@@ -229,46 +229,58 @@ class FrameAnnotator:
                                  bbox: tuple,
                                  color: tuple, thickness: int):
         """
-        Draw the vehicle footprint using the segmentation mask.
+        Draw the vehicle outline using the segmentation mask contour.
         
-        Traces the actual vehicle outline at the lower portion
-        (tire level), giving a precise road-level footprint.
+        Draws the actual detected vehicle silhouette (bottom half only,
+        representing the road-level body outline).
         """
         x1, y1, x2, y2 = bbox
         bbox_height = y2 - y1
         
-        # Define the tire band: scan rows from 75% to 90% of bbox height
-        tire_top = int(y1 + bbox_height * 0.75)
-        tire_bottom = int(y1 + bbox_height * 0.90)
+        # Only use the bottom half of the mask (body/tire level, not roof)
+        # This gives a road-level outline
+        mid_y = int(y1 + bbox_height * 0.50)
         
-        # Collect left/right edges at each row in the tire band
-        left_edges = []
-        right_edges = []
+        # Zero out the top portion of the mask (we only want the lower body)
+        mask_lower = mask.copy()
+        mask_lower[:mid_y, :] = 0
         
-        for row_y in range(tire_top, min(tire_bottom + 1, mask.shape[0])):
-            row = mask[row_y, :]
-            nonzero = np.where(row > 0)[0]
-            if len(nonzero) > 0:
-                left_edges.append((int(nonzero[0]), row_y))
-                right_edges.append((int(nonzero[-1]), row_y))
+        # Also clip to bbox region (avoid stray mask pixels elsewhere)
+        mask_clipped = np.zeros_like(mask_lower)
+        # Expand bbox slightly for the mask region
+        pad = 5
+        clip_x1 = max(0, x1 - pad)
+        clip_x2 = min(mask.shape[1], x2 + pad)
+        clip_y1 = max(0, mid_y)
+        clip_y2 = min(mask.shape[0], y2 + pad)
+        mask_clipped[clip_y1:clip_y2, clip_x1:clip_x2] = mask_lower[clip_y1:clip_y2, clip_x1:clip_x2]
         
-        if len(left_edges) < 2:
-            # Not enough mask data, fall back to bbox method
+        # Find contours of the clipped mask
+        contours, _ = cv2.findContours(mask_clipped, cv2.RETR_EXTERNAL, 
+                                        cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            # Fall back to bbox method
             self._draw_3d_box(frame, bbox, 0, color, thickness)
             return
         
-        # Build the footprint polygon from mask edges
-        # Left edges (top to bottom) + right edges (bottom to top)
-        polygon_pts = left_edges + list(reversed(right_edges))
-        pts = np.array(polygon_pts, dtype=np.int32)
+        # Use the largest contour (the vehicle body)
+        largest_contour = max(contours, key=cv2.contourArea)
         
-        cv2.polylines(frame, [pts], isClosed=True, color=color, thickness=thickness)
+        # Draw the contour
+        cv2.drawContours(frame, [largest_contour], -1, color, thickness)
         
-        # Thicker bottom edge
-        if right_edges:
-            bottom_left = left_edges[-1]
-            bottom_right = right_edges[-1]
-            cv2.line(frame, bottom_left, bottom_right, color, thickness + 1)
+        # Draw a thicker bottom edge (find the bottommost points)
+        bottom_pts = largest_contour[largest_contour[:, :, 1].argmax()][0]
+        # Find leftmost and rightmost points at or near the bottom
+        bottom_y_threshold = largest_contour[:, :, 1].max() - 5
+        bottom_indices = largest_contour[:, :, 1] >= bottom_y_threshold
+        if bottom_indices.any():
+            bottom_points = largest_contour[bottom_indices.flatten()]
+            if len(bottom_points) >= 2:
+                left_pt = tuple(bottom_points[bottom_points[:, 0].argmin()])
+                right_pt = tuple(bottom_points[bottom_points[:, 0].argmax()])
+                cv2.line(frame, left_pt, right_pt, color, thickness + 1)
     
     def _draw_vehicles_no_distance(self, frame: np.ndarray,
                                     tracks: List[TrackedObject]):
