@@ -579,6 +579,56 @@ class VideoAnalysisApp:
         
         return filtered
     
+    @staticmethod
+    def _suppress_duplicate_tracks(tracks):
+        """
+        Remove duplicate tracks that overlap significantly.
+        
+        YOLO sometimes detects the same vehicle twice with different
+        class labels (e.g., 'car' and 'truck'). This merges overlapping
+        tracks, keeping the one with higher confidence.
+        """
+        if len(tracks) <= 1:
+            return tracks
+        
+        # Sort by confidence (highest first)
+        sorted_tracks = sorted(tracks, key=lambda t: t.confidence, reverse=True)
+        
+        keep = []
+        suppressed = set()
+        
+        for i, track_a in enumerate(sorted_tracks):
+            if i in suppressed:
+                continue
+            
+            keep.append(track_a)
+            ax1, ay1, ax2, ay2 = track_a.bbox
+            
+            for j in range(i + 1, len(sorted_tracks)):
+                if j in suppressed:
+                    continue
+                
+                bx1, by1, bx2, by2 = sorted_tracks[j].bbox
+                
+                # Compute IoU
+                ix1 = max(ax1, bx1)
+                iy1 = max(ay1, by1)
+                ix2 = min(ax2, bx2)
+                iy2 = min(ay2, by2)
+                
+                inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+                area_a = (ax2 - ax1) * (ay2 - ay1)
+                area_b = (bx2 - bx1) * (by2 - by1)
+                union = area_a + area_b - inter
+                
+                iou = inter / union if union > 0 else 0
+                
+                # If IoU > 0.5, these are the same vehicle — suppress the lower-confidence one
+                if iou > 0.5:
+                    suppressed.add(j)
+        
+        return keep
+    
     def _update_canvas(self, frame: np.ndarray):
         """Display a frame on the canvas, scaled to fit."""
         canvas_w = self._canvas.winfo_width()
@@ -1133,6 +1183,9 @@ class VideoAnalysisApp:
                 # Filter out cross-median vehicles (beyond left lane line)
                 if lane_result and lane_result.left_lane:
                     tracks = self._filter_cross_median(tracks, lane_result)
+                
+                # Remove duplicate tracks (same vehicle detected as multiple classes)
+                tracks = self._suppress_duplicate_tracks(tracks)
                 
                 # Estimate distances - timestamp is from video T0
                 timestamp = idx / self._fps
