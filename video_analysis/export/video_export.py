@@ -91,6 +91,9 @@ class FrameAnnotator:
         # Draw vehicle boxes and distance labels
         if frame_distances:
             self._draw_vehicles_with_distance(annotated, frame_distances)
+            # Draw lane-to-vehicle distance lines on the ground
+            if self.show_lane_distance and lane_result and lane_result.has_lanes:
+                self._draw_lane_distance_lines(annotated, frame_distances, lane_result)
         elif tracks:
             self._draw_vehicles_no_distance(annotated, tracks)
         
@@ -168,65 +171,54 @@ class FrameAnnotator:
         """
         Draw a 3D perspective cuboid around a detected vehicle.
         
-        Uses the 2D bounding box as the front face, and projects depth
-        lines toward a vanishing point to create a 3D effect.
+        The front face is the 2D bounding box. The rear face is offset
+        upward and inward (toward horizon), creating depth appearance.
+        Depth amount scales inversely with distance.
         """
         x1, y1, x2, y2 = bbox
         h, w = frame.shape[:2]
         
-        # Vanishing point (approximately at horizon, center of image)
-        vp_x = w // 2
-        vp_y = int(h * 0.35)  # Horizon roughly at 35% from top
+        # Draw the front face (main 2D bbox)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
         
-        # Depth of the 3D box in pixels (proportional to bbox size, 
-        # smaller for farther objects)
-        bbox_width = x2 - x1
+        # Calculate depth offset (smaller for farther vehicles)
         bbox_height = y2 - y1
+        bbox_width = x2 - x1
         
-        # Depth factor: larger nearby, smaller far away
-        # Use ~25% of bbox width as depth projection
-        depth_factor = 0.25
-        depth_px = int(bbox_width * depth_factor)
+        # Skip 3D effect for very small or far-away detections
+        if bbox_width < 30 or bbox_height < 30:
+            return
         
-        # Calculate rear face corners by moving toward vanishing point
-        def toward_vp(px, py, amount):
-            """Move a point toward the vanishing point by a fraction."""
+        # Depth lines go toward the vanishing point (image center, above bbox)
+        vp_x = w // 2
+        vp_y = int(h * 0.3)
+        
+        # Offset amount: proportional to bbox size but capped
+        offset = max(5, min(int(bbox_width * 0.15), 25))
+        
+        # Direction toward vanishing point for each corner
+        def shrink_toward_vp(px, py):
             dx = vp_x - px
             dy = vp_y - py
-            dist_to_vp = max(1, (dx*dx + dy*dy) ** 0.5)
-            frac = amount / dist_to_vp
-            return (int(px + dx * frac), int(py + dy * frac))
+            dist = max(1.0, (dx*dx + dy*dy) ** 0.5)
+            return (int(px + dx * offset / dist), int(py + dy * offset / dist))
         
-        # Front face (the standard 2D bbox)
-        front_tl = (x1, y1)
-        front_tr = (x2, y1)
-        front_bl = (x1, y2)
-        front_br = (x2, y2)
+        # Rear corners (shifted toward VP)
+        r_tl = shrink_toward_vp(x1, y1)
+        r_tr = shrink_toward_vp(x2, y1)
+        r_bl = shrink_toward_vp(x1, y2)
+        r_br = shrink_toward_vp(x2, y2)
         
-        # Rear face (shifted toward vanishing point)
-        rear_tl = toward_vp(x1, y1, depth_px)
-        rear_tr = toward_vp(x2, y1, depth_px)
-        rear_bl = toward_vp(x1, y2, depth_px)
-        rear_br = toward_vp(x2, y2, depth_px)
+        # Draw rear face (thinner)
+        thin = max(1, thickness - 1)
+        cv2.line(frame, r_tl, r_tr, color, thin)
+        cv2.line(frame, r_tr, r_br, color, thin)
+        cv2.line(frame, r_br, r_bl, color, thin)
+        cv2.line(frame, r_bl, r_tl, color, thin)
         
-        # Draw front face
-        cv2.line(frame, front_tl, front_tr, color, thickness)
-        cv2.line(frame, front_tr, front_br, color, thickness)
-        cv2.line(frame, front_br, front_bl, color, thickness)
-        cv2.line(frame, front_bl, front_tl, color, thickness)
-        
-        # Draw rear face (slightly transparent / thinner)
-        rear_thick = max(1, thickness - 1)
-        cv2.line(frame, rear_tl, rear_tr, color, rear_thick)
-        cv2.line(frame, rear_tr, rear_br, color, rear_thick)
-        cv2.line(frame, rear_br, rear_bl, color, rear_thick)
-        cv2.line(frame, rear_bl, rear_tl, color, rear_thick)
-        
-        # Draw connecting edges (depth lines)
-        cv2.line(frame, front_tl, rear_tl, color, rear_thick)
-        cv2.line(frame, front_tr, rear_tr, color, rear_thick)
-        cv2.line(frame, front_bl, rear_bl, color, rear_thick)
-        cv2.line(frame, front_br, rear_br, color, rear_thick)
+        # Draw only top connecting edges (gives roof/depth impression)
+        cv2.line(frame, (x1, y1), r_tl, color, thin)
+        cv2.line(frame, (x2, y1), r_tr, color, thin)
     
     def _draw_vehicles_no_distance(self, frame: np.ndarray,
                                     tracks: List[TrackedObject]):
@@ -266,6 +258,84 @@ class FrameAnnotator:
             pts = np.array(center_line.points, dtype=np.int32)
             if len(pts) > 1:
                 cv2.polylines(frame, [pts], False, LANE_COLOR_CENTER, 2)
+    
+    def _draw_lane_distance_lines(self, frame: np.ndarray, 
+                                   fd: FrameDistances,
+                                   lane_result: LaneDetectionResult):
+        """
+        Draw horizontal lines on the road from vehicle to nearest lane line,
+        showing the lateral distance measurement.
+        """
+        if not lane_result or not lane_result.has_lanes:
+            return
+        
+        for vd in fd.vehicles:
+            is_selected = vd.track_id in self.selected_ids
+            if not is_selected and self.selected_ids:
+                continue
+            
+            x1, y1, x2, y2 = vd.bbox
+            vehicle_bottom_y = y2
+            vehicle_center_x = int((x1 + x2) / 2)
+            
+            color = get_track_color(vd.track_id)
+            
+            # Draw line from vehicle bottom-center to left lane
+            if vd.lane_offset_left_m is not None and lane_result.left_lane:
+                lane_x = int(lane_result.left_lane.get_x_at_y(float(vehicle_bottom_y)))
+                # Draw dashed line along the bottom of the bbox
+                line_y = vehicle_bottom_y - 3
+                self._draw_dashed_line(frame, (lane_x, line_y), 
+                                       (vehicle_center_x, line_y), 
+                                       LANE_COLOR_LEFT, 2)
+                # Label
+                mid_x = (lane_x + vehicle_center_x) // 2
+                cv2.putText(frame, f"{vd.lane_offset_left_m:.1f}m",
+                           (mid_x - 15, line_y - 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, LANE_COLOR_LEFT, 1)
+            
+            # Draw line from vehicle bottom-center to right lane
+            if vd.lane_offset_right_m is not None and lane_result.right_lane:
+                lane_x = int(lane_result.right_lane.get_x_at_y(float(vehicle_bottom_y)))
+                line_y = vehicle_bottom_y - 3
+                self._draw_dashed_line(frame, (vehicle_center_x, line_y),
+                                       (lane_x, line_y),
+                                       LANE_COLOR_RIGHT, 2)
+                # Label
+                mid_x = (vehicle_center_x + lane_x) // 2
+                cv2.putText(frame, f"{vd.lane_offset_right_m:.1f}m",
+                           (mid_x - 15, line_y - 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, LANE_COLOR_RIGHT, 1)
+    
+    def _draw_dashed_line(self, frame: np.ndarray, 
+                          pt1: tuple, pt2: tuple, 
+                          color: tuple, thickness: int, 
+                          dash_length: int = 8):
+        """Draw a dashed line between two points."""
+        x1, y1 = pt1
+        x2, y2 = pt2
+        dx = x2 - x1
+        dy = y2 - y1
+        dist = max(1, int((dx*dx + dy*dy) ** 0.5))
+        
+        num_dashes = dist // (dash_length * 2)
+        if num_dashes < 1:
+            cv2.line(frame, pt1, pt2, color, thickness)
+            return
+        
+        for i in range(num_dashes + 1):
+            start_frac = (i * 2 * dash_length) / dist
+            end_frac = min(((i * 2 + 1) * dash_length) / dist, 1.0)
+            
+            if start_frac > 1.0:
+                break
+            
+            sx = int(x1 + dx * start_frac)
+            sy = int(y1 + dy * start_frac)
+            ex = int(x1 + dx * end_frac)
+            ey = int(y1 + dy * end_frac)
+            
+            cv2.line(frame, (sx, sy), (ex, ey), color, thickness)
     
     def _draw_lane_distance_info(self, frame: np.ndarray, fd: FrameDistances):
         """Draw lane offset information in the corner."""

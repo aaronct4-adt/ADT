@@ -344,7 +344,7 @@ class VideoAnalysisApp:
         preset = self._preset_var.get()
         
         # Determine effective resolution (sub-view or full)
-        if self._view_var.get() != "full" and self._is_quad_view:
+        if self._view_var.get() != "full":
             eff_w = width // 2
             eff_h = height // 2
         else:
@@ -442,9 +442,11 @@ class VideoAnalysisApp:
         """Extract the selected view from the frame."""
         view = self._view_var.get()
         
-        if view == "full" or not self._is_quad_view:
+        if view == "full":
             return frame.copy()
         
+        # Always split at center when a quadrant is selected,
+        # regardless of auto-detection result
         h, w = frame.shape[:2]
         cx, cy = w // 2, h // 2
         
@@ -806,7 +808,7 @@ class VideoAnalysisApp:
             dist_est = DistanceEstimator(self._camera_model, dist_config)
             
             # Get effective image dimensions
-            if self._view_var.get() != "full" and self._is_quad_view:
+            if self._view_var.get() != "full":
                 w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)) // 2
             else:
                 w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
