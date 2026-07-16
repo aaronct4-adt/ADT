@@ -6,6 +6,10 @@ Takes two AVI videos that are each in a 2x2 quad-box layout,
 lets you pick which quadrant from which source video maps to
 each quadrant of the output, then exports the merged result.
 
+You can also use FULL to take the entire frame from a video
+and scale it into one of the output quadrants (useful for
+single-camera full-screen videos).
+
 Quadrant layout:
     +----+----+
     | TL | TR |
@@ -21,8 +25,9 @@ Usage:
         <output_quadrant>=<source_video>:<source_quadrant>
 
     Example: TL=2:BR means "output's top-left gets video 2's bottom-right"
+    Example: BL=2:FULL means "output's bottom-left gets all of video 2 scaled to fit"
 
-    Valid quadrant names: TL, TR, BL, BR
+    Valid quadrant names: TL, TR, BL, BR, FULL
     Valid video sources: 1, 2
 """
 
@@ -33,6 +38,7 @@ import numpy as np
 
 
 QUADRANT_NAMES = ["TL", "TR", "BL", "BR"]
+SOURCE_QUADRANTS = ["TL", "TR", "BL", "BR", "FULL"]
 
 
 def parse_mapping(map_args):
@@ -40,6 +46,7 @@ def parse_mapping(map_args):
     Parse mapping arguments like 'TL=1:TR' into a dict.
     Returns: {output_quad: (video_index, source_quad)}
         video_index is 0-based internally (0 or 1)
+        source_quad can be TL, TR, BL, BR, or FULL
     """
     mapping = {}
     for entry in map_args:
@@ -53,8 +60,8 @@ def parse_mapping(map_args):
             if out_quad not in QUADRANT_NAMES:
                 print(f"Error: Invalid output quadrant '{out_quad}'. Must be one of {QUADRANT_NAMES}")
                 sys.exit(1)
-            if src_quad not in QUADRANT_NAMES:
-                print(f"Error: Invalid source quadrant '{src_quad}'. Must be one of {QUADRANT_NAMES}")
+            if src_quad not in SOURCE_QUADRANTS:
+                print(f"Error: Invalid source quadrant '{src_quad}'. Must be one of {SOURCE_QUADRANTS}")
                 sys.exit(1)
             if vid_num not in (1, 2):
                 print(f"Error: Video number must be 1 or 2, got '{vid_num}'")
@@ -62,7 +69,7 @@ def parse_mapping(map_args):
 
             mapping[out_quad] = (vid_num - 1, src_quad)  # store 0-based index
         except ValueError:
-            print(f"Error: Invalid mapping format '{entry}'. Expected format: TL=1:TR")
+            print(f"Error: Invalid mapping format '{entry}'. Expected format: TL=1:TR or TL=1:FULL")
             sys.exit(1)
 
     # Ensure all 4 output quadrants are mapped
@@ -76,9 +83,13 @@ def parse_mapping(map_args):
 
 def extract_quadrant(frame, quadrant_name):
     """
-    Extract a quadrant from a frame.
+    Extract a quadrant from a frame, or return the full frame.
     Frame is split into 4 equal parts based on its dimensions.
+    If quadrant_name is "FULL", the entire frame is returned.
     """
+    if quadrant_name == "FULL":
+        return frame.copy()
+
     h, w = frame.shape[:2]
     mid_y = h // 2
     mid_x = w // 2
@@ -146,11 +157,19 @@ Quadrant Layout:
 Mapping Format:
     <output_quadrant>=<video_number>:<source_quadrant>
 
-Example:
+    Source quadrant can be: TL, TR, BL, BR, or FULL
+    Use FULL to scale the entire source video into one output quadrant.
+
+Examples:
     python quad_merge.py --video1 cam1.avi --video2 cam2.avi --output merged.avi \\
         --map TL=1:TL TR=1:TR BL=2:BL BR=2:BR
 
     This takes the top row from video 1 and the bottom row from video 2.
+
+    python quad_merge.py --video1 quad.avi --video2 fullscreen.avi --output merged.avi \\
+        --map TL=1:TL TR=1:TR BL=1:BL BR=2:FULL
+
+    This takes 3 quadrants from video 1, and scales all of video 2 into the bottom-right.
         """,
     )
 
@@ -162,7 +181,7 @@ Example:
         nargs=4,
         required=True,
         metavar="QUAD=VID:QUAD",
-        help="Four quadrant mappings, e.g. TL=1:TL TR=2:TR BL=1:BL BR=2:BR",
+        help="Four quadrant mappings, e.g. TL=1:TL TR=2:TR BL=1:BL BR=2:FULL (use FULL for entire frame)",
     )
     parser.add_argument(
         "--codec",

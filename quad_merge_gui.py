@@ -3,8 +3,9 @@
 Quad-Box Video Merger - GUI Version
 ====================================
 A tkinter-based GUI that lets you:
-1. Load two quad-box AVI videos
+1. Load two quad-box (or full-screen) AVI videos
 2. Visually select which quadrant from which video maps to each output slot
+   - Use "FULL" to scale the entire source video into one output quadrant
 3. Choose codec and output path
 4. Export the merged video with a progress bar
 
@@ -22,6 +23,7 @@ from PIL import Image, ImageTk
 
 
 QUADRANT_NAMES = ["TL", "TR", "BL", "BR"]
+SOURCE_QUADRANTS = ["TL", "TR", "BL", "BR", "FULL"]
 QUADRANT_LABELS = {
     "TL": "Top-Left",
     "TR": "Top-Right",
@@ -31,7 +33,10 @@ QUADRANT_LABELS = {
 
 
 def extract_quadrant(frame, quadrant_name):
-    """Extract a quadrant from a frame."""
+    """Extract a quadrant from a frame, or return the full frame."""
+    if quadrant_name == "FULL":
+        return frame.copy()
+
     h, w = frame.shape[:2]
     mid_y = h // 2
     mid_x = w // 2
@@ -146,7 +151,7 @@ class QuadMergerApp:
         ttk.Label(map_frame, text="Source Quadrant", font=("", 9, "bold")).grid(row=0, column=2)
 
         # Diagram reference
-        diagram_text = "  TL | TR\n  ---|---\n  BL | BR"
+        diagram_text = "  TL | TR\n  ---|---\n  BL | BR\n\n  FULL = entire frame"
         ttk.Label(map_frame, text=diagram_text, font=("Courier", 9), foreground="gray").grid(
             row=0, column=3, rowspan=3, padx=(30, 0), sticky="n"
         )
@@ -167,7 +172,7 @@ class QuadMergerApp:
             quad_combo = ttk.Combobox(
                 map_frame,
                 textvariable=self.mapping_vars[q]["quadrant"],
-                values=QUADRANT_NAMES,
+                values=SOURCE_QUADRANTS,
                 width=8,
                 state="readonly",
             )
