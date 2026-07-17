@@ -170,30 +170,35 @@ class HillsideLandscapeApp {
         if (z < 0.15) {
             // Behind house - flat yard at top elevation
             height = 18.5;
-        } else if (z < 0.30) {
+        } else if (z < 0.28) {
             // House area - stays flat (house sits on this)
             height = 18.0;
-        } else if (z < 0.40) {
-            // Concrete patio under deck + paver area - relatively flat, slight step down
-            const t = (z - 0.30) / 0.10;
-            height = 18.0 - t * 2.5; // drops from 18 to about 15.5
-        } else if (z < 0.48) {
-            // Gentle upper slope / transition from patio to steep section
-            const t = (z - 0.40) / 0.08;
-            height = 15.5 - t * 3.0; // 15.5 down to about 12.5
-        } else if (z < 0.72) {
+        } else if (z < 0.35) {
+            // Concrete patio under deck - slight step down
+            const t = (z - 0.28) / 0.07;
+            height = 18.0 - t * 1.5; // drops from 18 to about 16.5
+        } else if (z < 0.46) {
+            // FLAT AREA (~15ft beyond the deck) - where patio furniture sits
+            // This is relatively level, just slight grade for drainage
+            const t = (z - 0.35) / 0.11;
+            height = 16.5 - t * 1.5; // very gentle: 16.5 to 15.0
+        } else if (z < 0.52) {
+            // Transition from flat area to steep slope
+            const t = (z - 0.46) / 0.06;
+            height = 15.0 - t * 2.5; // 15.0 down to about 12.5
+        } else if (z < 0.75) {
             // STEEP hillside - the main slope that needs re-grading
-            const t = (z - 0.48) / 0.24;
+            const t = (z - 0.52) / 0.23;
             // S-curve for natural steep slope
             const curve = t * t * (3 - 2 * t); // smoothstep
             height = 12.5 - curve * 10.5; // 12.5 down to about 2.0
-        } else if (z < 0.82) {
+        } else if (z < 0.84) {
             // Lower area leveling to beach
-            const t = (z - 0.72) / 0.10;
+            const t = (z - 0.75) / 0.09;
             height = 2.0 - t * 1.5; // 2.0 down to 0.5
-        } else if (z < 0.88) {
+        } else if (z < 0.90) {
             // Beach / sand
-            const t = (z - 0.82) / 0.06;
+            const t = (z - 0.84) / 0.06;
             height = 0.5 - t * 0.3;
         } else {
             // Water
@@ -201,18 +206,17 @@ class HillsideLandscapeApp {
         }
 
         // === LATERAL VARIATION (across the lot) ===
-        // Slight bowl shape - edges a bit higher
         const centerDist = Math.abs(x - 0.5) * 2;
-        if (z > 0.35 && z < 0.80) {
-            height += centerDist * 0.6;
+        if (z > 0.40 && z < 0.80) {
+            height += centerDist * 0.5;
         }
 
         // Natural undulations (subtle)
-        height += Math.sin(x * Math.PI * 4) * 0.2;
-        height += Math.cos(z * Math.PI * 3 + x * 2) * 0.15;
+        height += Math.sin(x * Math.PI * 4) * 0.15;
+        height += Math.cos(z * Math.PI * 3 + x * 2) * 0.12;
 
         // Rocky/rough area on the steep slope
-        if (z > 0.48 && z < 0.72) {
+        if (z > 0.52 && z < 0.75) {
             height += (Math.sin(x * 17 + z * 13) * 0.3 + 
                        Math.cos(x * 23 + z * 7) * 0.2);
         }
@@ -270,12 +274,12 @@ class HillsideLandscapeApp {
             let color = new THREE.Color();
 
             // Concrete patio area (gray)
-            if (zNorm > 0.30 && zNorm < 0.38 && Math.abs(xWorld) < 12) {
+            if (zNorm > 0.28 && zNorm < 0.35 && Math.abs(xWorld) < 12) {
                 color.setHex(0x999999);
             }
-            // Paver/flat area
-            else if (zNorm > 0.38 && zNorm < 0.45 && Math.abs(xWorld) < 10) {
-                color.setHex(0x8a7b6b);
+            // Flat area beyond deck (packed earth/paver)
+            else if (zNorm > 0.35 && zNorm < 0.46 && Math.abs(xWorld) < 14) {
+                color.setHex(0x7a7560);
             }
             // Beach
             else if (y < 0.6) {
@@ -494,92 +498,146 @@ class HillsideLandscapeApp {
 
 
     createExistingStairs() {
-        // Existing wooden stairs going down the hillside
-        // From the photo: stairs are to the LEFT (when viewing from lake)
-        // They go from the upper flat area (near patio level ~15ft) 
-        // down the slope to the beach/dock level (~1.5ft)
-        // Total rise ~13.5ft over a horizontal run of about 20ft
+        // Existing wooden stairs - from photo they go DOWN from upper area,
+        // hit a landing/platform, then PIVOT 45 degrees before continuing down to dock.
+        // Located to the LEFT when viewed from lake.
         const stairs = new THREE.Group();
         stairs.userData = { type: 'existing-stairs', fixed: true };
 
-        const totalRise = 13.5;   // feet of elevation change
-        const totalRun = 22;      // horizontal distance along slope
-        const stepCount = 22;     // number of steps
         const stepWidth = 3.5;
-        const risePerStep = totalRise / stepCount;
-        const runPerStep = totalRun / stepCount;
         const woodColor = 0xC4A35A;
         const stringerColor = 0x8B6914;
 
-        // Create steps descending along the Z axis (toward lake)
-        for (let i = 0; i < stepCount; i++) {
-            const stepGeom = new THREE.BoxGeometry(stepWidth, 0.18, 0.9);
+        // === UPPER SECTION: Going straight out from the hill (toward lake, +Z) ===
+        // About 8 steps descending from patio level down to landing
+        const upperSteps = 8;
+        const upperRise = 5.0;
+        const upperRun = 8.0;
+        const upperRisePerStep = upperRise / upperSteps;
+        const upperRunPerStep = upperRun / upperSteps;
+
+        for (let i = 0; i < upperSteps; i++) {
+            const stepGeom = new THREE.BoxGeometry(stepWidth, 0.18, 0.85);
             const stepMat = new THREE.MeshStandardMaterial({ color: woodColor, roughness: 0.75 });
             const step = new THREE.Mesh(stepGeom, stepMat);
-            // Each step goes down in Y and forward in Z
-            step.position.set(0, totalRise - i * risePerStep, i * runPerStep);
+            step.position.set(0, upperRise - i * upperRisePerStep, i * upperRunPerStep);
             step.castShadow = true;
             step.receiveShadow = true;
             stairs.add(step);
         }
 
-        // Landing platform halfway down
-        const landingGeom = new THREE.BoxGeometry(4.5, 0.22, 3.5);
-        const landingMat = new THREE.MeshStandardMaterial({ color: woodColor, roughness: 0.75 });
-        const landing = new THREE.Mesh(landingGeom, landingMat);
-        landing.position.set(0, totalRise * 0.5, totalRun * 0.5);
-        landing.castShadow = true;
-        stairs.add(landing);
-
-        // Side stringers (angled boards along the run)
-        const stringerLen = Math.sqrt(totalRise ** 2 + totalRun ** 2);
-        const stringerAngle = Math.atan2(totalRise, totalRun);
+        // Upper stringers
+        const upperLen = Math.sqrt(upperRise ** 2 + upperRun ** 2);
+        const upperAngle = Math.atan2(upperRise, upperRun);
         [-1, 1].forEach(side => {
-            const sGeom = new THREE.BoxGeometry(0.15, 0.7, stringerLen);
+            const sGeom = new THREE.BoxGeometry(0.15, 0.6, upperLen);
             const sMat = new THREE.MeshStandardMaterial({ color: stringerColor, roughness: 0.8 });
             const stringer = new THREE.Mesh(sGeom, sMat);
-            stringer.position.set(
-                side * (stepWidth / 2 + 0.15),
-                totalRise / 2 + 0.3,
-                totalRun / 2
-            );
-            stringer.rotation.x = stringerAngle;
+            stringer.position.set(side * (stepWidth / 2 + 0.12), upperRise / 2 + 0.2, upperRun / 2);
+            stringer.rotation.x = upperAngle;
             stringer.castShadow = true;
             stairs.add(stringer);
         });
 
-        // Railing posts along the left side
-        for (let i = 0; i <= stepCount; i += 3) {
-            const postGeom = new THREE.BoxGeometry(0.18, 3.2, 0.18);
+        // === LANDING PLATFORM (where the 45-degree pivot happens) ===
+        const landingY = upperRise - upperSteps * upperRisePerStep;
+        const landingZ = upperSteps * upperRunPerStep;
+        const landingGeom = new THREE.BoxGeometry(5, 0.22, 5);
+        const landingMat = new THREE.MeshStandardMaterial({ color: woodColor, roughness: 0.75 });
+        const landing = new THREE.Mesh(landingGeom, landingMat);
+        landing.position.set(0, landingY, landingZ + 2);
+        landing.castShadow = true;
+        stairs.add(landing);
+
+        // === LOWER SECTION: Pivots 45 degrees to the left, descends to dock ===
+        // Direction after 45-degree turn: goes in both -X and +Z simultaneously
+        const lowerSteps = 12;
+        const lowerRise = 8.0;
+        const lowerHorizPerStep = 1.0; // horizontal distance per step
+        const lowerRisePerStep = lowerRise / lowerSteps;
+        // 45 degrees means equal X and Z components
+        const cos45 = Math.cos(Math.PI / 4); // 0.707
+        const sin45 = Math.sin(Math.PI / 4); // 0.707
+        const pivotZ = landingZ + 4;
+        const pivotX = 0;
+
+        for (let i = 0; i < lowerSteps; i++) {
+            const stepGeom = new THREE.BoxGeometry(stepWidth, 0.18, 0.85);
+            const stepMat = new THREE.MeshStandardMaterial({ color: woodColor, roughness: 0.75 });
+            const step = new THREE.Mesh(stepGeom, stepMat);
+            // Move along the 45-degree direction (-X and +Z)
+            const dx = -(i + 1) * lowerHorizPerStep * sin45;
+            const dz = (i + 1) * lowerHorizPerStep * cos45;
+            step.position.set(
+                pivotX + dx,
+                landingY - (i + 1) * lowerRisePerStep,
+                pivotZ + dz
+            );
+            step.rotation.y = Math.PI / 4; // rotate step 45 degrees
+            step.castShadow = true;
+            step.receiveShadow = true;
+            stairs.add(step);
+        }
+
+        // Lower stringers (along the 45-degree run)
+        const lowerRunTotal = lowerSteps * lowerHorizPerStep;
+        const lowerLen = Math.sqrt(lowerRise ** 2 + lowerRunTotal ** 2);
+        const lowerAngle = Math.atan2(lowerRise, lowerRunTotal);
+        const lowerCenterDx = -(lowerRunTotal / 2) * sin45;
+        const lowerCenterDz = (lowerRunTotal / 2) * cos45;
+        [-1, 1].forEach(side => {
+            const sGeom = new THREE.BoxGeometry(0.15, 0.6, lowerLen);
+            const sMat = new THREE.MeshStandardMaterial({ color: stringerColor, roughness: 0.8 });
+            const stringer = new THREE.Mesh(sGeom, sMat);
+            // Offset perpendicular to the 45-degree direction
+            const perpX = side * (stepWidth / 2 + 0.12) * cos45;
+            const perpZ = side * (stepWidth / 2 + 0.12) * sin45;
+            stringer.position.set(
+                pivotX + lowerCenterDx + perpX,
+                landingY - lowerRise / 2 + 0.2,
+                pivotZ + lowerCenterDz + perpZ
+            );
+            stringer.rotation.y = Math.PI / 4;
+            stringer.rotation.x = lowerAngle;
+            stringer.castShadow = true;
+            stairs.add(stringer);
+        });
+
+        // Railing posts along upper section (left side)
+        for (let i = 0; i <= upperSteps; i += 2) {
+            const postGeom = new THREE.BoxGeometry(0.15, 3.2, 0.15);
             const postMat = new THREE.MeshStandardMaterial({ color: stringerColor, roughness: 0.8 });
             const post = new THREE.Mesh(postGeom, postMat);
             post.position.set(
-                -(stepWidth / 2 + 0.3),
-                totalRise - i * risePerStep + 1.6,
-                i * runPerStep
+                -(stepWidth / 2 + 0.25),
+                upperRise - i * upperRisePerStep + 1.6,
+                i * upperRunPerStep
             );
             post.castShadow = true;
             stairs.add(post);
         }
 
-        // Top rail along left side
-        const railLen = Math.sqrt(totalRise ** 2 + totalRun ** 2);
-        const railGeom = new THREE.BoxGeometry(0.12, 0.12, railLen);
-        const railMat = new THREE.MeshStandardMaterial({ color: stringerColor, roughness: 0.7 });
-        const topRail = new THREE.Mesh(railGeom, railMat);
-        topRail.position.set(
-            -(stepWidth / 2 + 0.3),
-            totalRise / 2 + 3.0,
-            totalRun / 2
-        );
-        topRail.rotation.x = stringerAngle;
-        stairs.add(topRail);
+        // Railing posts along lower section (left side of 45-degree run)
+        for (let i = 0; i <= lowerSteps; i += 3) {
+            const postGeom = new THREE.BoxGeometry(0.15, 3.2, 0.15);
+            const postMat = new THREE.MeshStandardMaterial({ color: stringerColor, roughness: 0.8 });
+            const post = new THREE.Mesh(postGeom, postMat);
+            const dx = -(i + 1) * lowerHorizPerStep * sin45;
+            const dz = (i + 1) * lowerHorizPerStep * cos45;
+            // Offset to left side (perpendicular to 45-degree direction)
+            const perpX = -(stepWidth / 2 + 0.25) * cos45;
+            const perpZ = -(stepWidth / 2 + 0.25) * sin45;
+            post.position.set(
+                pivotX + dx + perpX,
+                landingY - (i + 1) * lowerRisePerStep + 1.6,
+                pivotZ + dz + perpZ
+            );
+            post.castShadow = true;
+            stairs.add(post);
+        }
 
-        // Position: left side of property, starting at upper patio level
-        // x = negative is LEFT when viewed from lake
-        // z = higher value is closer to lake
-        // Starts near z=-2 (patio edge) and goes to z=+20 (near beach)
-        stairs.position.set(-16, 1.5, -2);
+        // Position: left side of property, upper section starts at patio area
+        stairs.position.set(-12, 8.5, 3);
         this.scene.add(stairs);
         this.siteStructures.push(stairs);
     }
@@ -641,29 +699,33 @@ class HillsideLandscapeApp {
     }
 
     createConcretePatio() {
-        // Concrete patio under the house deck
+        // Concrete patio under the house deck - NO wall in front
+        // Just a flat concrete pad
         const patio = new THREE.Group();
         patio.userData = { type: 'concrete-patio', fixed: true };
 
         // Main concrete slab under the deck
-        const slabGeom = new THREE.BoxGeometry(24, 0.4, 14);
+        const slabGeom = new THREE.BoxGeometry(24, 0.3, 14);
         const slabMat = new THREE.MeshStandardMaterial({ 
             color: 0x9a9a8e, roughness: 0.9, metalness: 0.0 
         });
         const slab = new THREE.Mesh(slabGeom, slabMat);
-        slab.position.set(0, 0.2, 0);
+        slab.position.set(0, 0.15, 0);
         slab.receiveShadow = true;
         patio.add(slab);
 
-        // Stone/block retaining wall at front edge of patio (from photo)
-        const wallGeom = new THREE.BoxGeometry(24, 2.5, 0.8);
-        const wallMat = new THREE.MeshStandardMaterial({ 
-            color: 0x7a7a6a, roughness: 0.95 
+        // Flat area ~15ft beyond the deck (where patio furniture is in photos)
+        // This is the open area between the concrete pad and where slope begins
+        const flatAreaGeom = new THREE.BoxGeometry(28, 0.2, 15);
+        const flatAreaMat = new THREE.MeshStandardMaterial({
+            color: 0x7a7560,  // packed earth/paver tone
+            roughness: 0.95,
+            metalness: 0.0
         });
-        const wall = new THREE.Mesh(wallGeom, wallMat);
-        wall.position.set(0, 1.25, 7.2);
-        wall.castShadow = true;
-        patio.add(wall);
+        const flatArea = new THREE.Mesh(flatAreaGeom, flatAreaMat);
+        flatArea.position.set(0, -0.5, 14); // extends 15ft beyond the patio
+        flatArea.receiveShadow = true;
+        patio.add(flatArea);
 
         // Position under the house
         patio.position.set(2, 14.5, -5);
