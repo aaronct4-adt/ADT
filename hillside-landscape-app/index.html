@@ -11,16 +11,26 @@
         <!-- Left Panel - Tools -->
         <div id="toolbar" class="panel left-panel">
             <h2>Landscape Tools</h2>
-            
+
             <div class="tool-section">
-                <h3>View Controls</h3>
-                <button id="btn-reset-view" class="tool-btn" title="Reset camera to default view">Reset View</button>
-                <button id="btn-top-view" class="tool-btn" title="View from above">Top View</button>
-                <button id="btn-side-view" class="tool-btn" title="View from the lake">Lake View</button>
-                <button id="btn-house-view" class="tool-btn" title="View from house">House View</button>
+                <h3>Mode</h3>
+                <div class="tool-group">
+                    <button id="btn-mode-camera" class="tool-btn active" title="Rotate/pan camera">Camera</button>
+                    <button id="btn-mode-terrain" class="tool-btn" title="Edit terrain (Shift+click)">Terrain</button>
+                    <button id="btn-mode-select" class="tool-btn" title="Select/move structures">Select</button>
+                    <button id="btn-mode-place" class="tool-btn" title="Place new items">Place</button>
+                </div>
             </div>
 
             <div class="tool-section">
+                <h3>View Controls</h3>
+                <button id="btn-reset-view" class="tool-btn">Reset View</button>
+                <button id="btn-top-view" class="tool-btn">Top</button>
+                <button id="btn-side-view" class="tool-btn">Lake</button>
+                <button id="btn-house-view" class="tool-btn">House</button>
+            </div>
+
+            <div class="tool-section" id="terrain-tools-section">
                 <h3>Terrain Tools</h3>
                 <div class="tool-group">
                     <button id="btn-raise" class="tool-btn active" title="Raise terrain">Raise</button>
@@ -43,18 +53,24 @@
                 </div>
             </div>
 
-            <div class="tool-section">
-                <h3>Add Structures</h3>
-                <button id="btn-add-stairs" class="tool-btn struct-btn" title="Add stairs to hillside">Add Stairs</button>
-                <button id="btn-add-railing" class="tool-btn struct-btn" title="Add railing">Add Railing</button>
-                <button id="btn-add-retaining-wall" class="tool-btn struct-btn" title="Add retaining wall">Add Retaining Wall</button>
-                <button id="btn-delete-structure" class="tool-btn struct-btn danger" title="Delete selected structure">Delete Selected</button>
+            <div class="tool-section" id="place-tools-section">
+                <h3>Place Items</h3>
+                <button id="btn-place-stairs" class="tool-btn struct-btn">Stairs</button>
+                <button id="btn-place-railing" class="tool-btn struct-btn">Railing</button>
+                <button id="btn-place-retaining-wall" class="tool-btn struct-btn">Retaining Wall</button>
+                <button id="btn-place-rock" class="tool-btn struct-btn">Rock (snaps to ground)</button>
+                <button id="btn-place-tree" class="tool-btn struct-btn">Tree</button>
             </div>
 
-            <div class="tool-section">
-                <h3>Structure Properties</h3>
+            <div class="tool-section" id="select-tools-section">
+                <h3>Selection</h3>
+                <p style="font-size:11px;color:#aaa;">Click = select | Ctrl+click = multi-select<br>Drag selected = move | Arrow keys = nudge</p>
+                <button id="btn-group-selected" class="tool-btn">Group Selected</button>
+                <button id="btn-ungroup" class="tool-btn">Ungroup</button>
+                <button id="btn-snap-ground" class="tool-btn">Snap to Ground</button>
+                <button id="btn-delete-selected" class="tool-btn danger">Delete Selected</button>
                 <div id="structure-props" class="props-panel">
-                    <p class="hint">Select a structure to edit properties</p>
+                    <p class="hint">Click a structure to select it</p>
                 </div>
             </div>
 
@@ -63,7 +79,6 @@
                 <button id="btn-preset-original" class="tool-btn preset-btn">Original Grade</button>
                 <button id="btn-preset-gentle" class="tool-btn preset-btn">Gentle Slope</button>
                 <button id="btn-preset-terraced" class="tool-btn preset-btn">Terraced</button>
-                <button id="btn-preset-stepped" class="tool-btn preset-btn">Stepped Path</button>
             </div>
 
             <div class="tool-section">
@@ -72,7 +87,7 @@
                 <button id="btn-redo" class="tool-btn">Redo</button>
                 <button id="btn-export" class="tool-btn">Export Data</button>
                 <button id="btn-toggle-grid" class="tool-btn">Toggle Grid</button>
-                <button id="btn-toggle-wireframe" class="tool-btn">Toggle Wireframe</button>
+                <button id="btn-toggle-wireframe" class="tool-btn">Wireframe</button>
             </div>
         </div>
 
@@ -82,10 +97,10 @@
             <div id="info-overlay">
                 <span id="elevation-info">Elevation: --</span>
                 <span id="coords-info">Position: --</span>
-                <span id="mode-info">Mode: Raise Terrain</span>
+                <span id="mode-info">Mode: Camera</span>
             </div>
             <div id="instructions">
-                Left-drag: Rotate | Scroll: Zoom | Right-drag: Pan | <strong>Shift+Left-click: Edit terrain / Place structures</strong>
+                Left-drag: Rotate | Scroll: Zoom | Right-drag: Pan | Switch to Terrain/Select/Place mode to interact with scene
             </div>
         </div>
 
@@ -106,26 +121,14 @@
                 <canvas id="profile-canvas" width="250" height="120"></canvas>
             </div>
             <div class="tool-section">
-                <h3>Legend</h3>
-                <div id="legend">
-                    <div class="legend-item"><span class="legend-color" style="background: #2d5a27;"></span> High (House level)</div>
-                    <div class="legend-item"><span class="legend-color" style="background: #4a8c3f;"></span> Mid slope</div>
-                    <div class="legend-item"><span class="legend-color" style="background: #7ab648;"></span> Low slope</div>
-                    <div class="legend-item"><span class="legend-color" style="background: #c2b280;"></span> Beach</div>
-                    <div class="legend-item"><span class="legend-color" style="background: #4a90d9;"></span> Water</div>
-                    <div class="legend-item"><span class="legend-color" style="background: #8B4513;"></span> Wood structures</div>
-                </div>
-            </div>
-            <div class="tool-section">
-                <h3>Structures List</h3>
+                <h3>Structures</h3>
                 <ul id="structures-list">
-                    <li class="hint">No structures placed yet</li>
+                    <li class="hint">No structures yet</li>
                 </ul>
             </div>
         </div>
     </div>
 
-    <!-- Import maps for Three.js -->
     <script type="importmap">
     {
         "imports": {
