@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hillside Landscape & Re-Grading Tool</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app-container">
+        <!-- Left Panel - Tools -->
+        <div id="toolbar" class="panel left-panel">
+            <h2>Landscape Tools</h2>
+            
+            <div class="tool-section">
+                <h3>View Controls</h3>
+                <button id="btn-reset-view" class="tool-btn" title="Reset camera to default view">Reset View</button>
+                <button id="btn-top-view" class="tool-btn" title="View from above">Top View</button>
+                <button id="btn-side-view" class="tool-btn" title="View from the lake">Lake View</button>
+                <button id="btn-house-view" class="tool-btn" title="View from house">House View</button>
+            </div>
+
+            <div class="tool-section">
+                <h3>Terrain Tools</h3>
+                <div class="tool-group">
+                    <button id="btn-raise" class="tool-btn active" title="Raise terrain">Raise</button>
+                    <button id="btn-lower" class="tool-btn" title="Lower terrain">Lower</button>
+                    <button id="btn-flatten" class="tool-btn" title="Flatten to target height">Flatten</button>
+                    <button id="btn-smooth" class="tool-btn" title="Smooth terrain">Smooth</button>
+                    <button id="btn-terrace" class="tool-btn" title="Create flat terrace">Terrace</button>
+                </div>
+                <div class="slider-group">
+                    <label>Brush Size: <span id="brush-size-val">3</span></label>
+                    <input type="range" id="brush-size" min="1" max="10" value="3" step="0.5">
+                </div>
+                <div class="slider-group">
+                    <label>Brush Strength: <span id="brush-strength-val">0.5</span></label>
+                    <input type="range" id="brush-strength" min="0.1" max="2" value="0.5" step="0.1">
+                </div>
+                <div class="slider-group">
+                    <label>Target Height: <span id="target-height-val">5</span></label>
+                    <input type="range" id="target-height" min="0" max="20" value="5" step="0.5">
+                </div>
+            </div>
+
+            <div class="tool-section">
+                <h3>Add Structures</h3>
+                <button id="btn-add-stairs" class="tool-btn struct-btn" title="Add stairs to hillside">Add Stairs</button>
+                <button id="btn-add-railing" class="tool-btn struct-btn" title="Add railing">Add Railing</button>
+                <button id="btn-add-retaining-wall" class="tool-btn struct-btn" title="Add retaining wall">Add Retaining Wall</button>
+                <button id="btn-delete-structure" class="tool-btn struct-btn danger" title="Delete selected structure">Delete Selected</button>
+            </div>
+
+            <div class="tool-section">
+                <h3>Structure Properties</h3>
+                <div id="structure-props" class="props-panel">
+                    <p class="hint">Select a structure to edit properties</p>
+                </div>
+            </div>
+
+            <div class="tool-section">
+                <h3>Terrain Presets</h3>
+                <button id="btn-preset-original" class="tool-btn preset-btn">Original Grade</button>
+                <button id="btn-preset-gentle" class="tool-btn preset-btn">Gentle Slope</button>
+                <button id="btn-preset-terraced" class="tool-btn preset-btn">Terraced</button>
+                <button id="btn-preset-stepped" class="tool-btn preset-btn">Stepped Path</button>
+            </div>
+
+            <div class="tool-section">
+                <h3>Actions</h3>
+                <button id="btn-undo" class="tool-btn">Undo</button>
+                <button id="btn-redo" class="tool-btn">Redo</button>
+                <button id="btn-export" class="tool-btn">Export Data</button>
+                <button id="btn-toggle-grid" class="tool-btn">Toggle Grid</button>
+                <button id="btn-toggle-wireframe" class="tool-btn">Toggle Wireframe</button>
+            </div>
+        </div>
+
+        <!-- 3D Viewport -->
+        <div id="viewport">
+            <canvas id="three-canvas"></canvas>
+            <div id="info-overlay">
+                <span id="elevation-info">Elevation: --</span>
+                <span id="coords-info">Position: --</span>
+                <span id="mode-info">Mode: Raise Terrain</span>
+            </div>
+            <div id="instructions">
+                Left-click: Edit terrain / Select structure | Right-drag: Rotate | Scroll: Zoom | Middle-drag: Pan
+            </div>
+        </div>
+
+        <!-- Right Panel - Info -->
+        <div id="info-panel" class="panel right-panel">
+            <h2>Project Info</h2>
+            <div class="tool-section">
+                <h3>Elevation Stats</h3>
+                <div id="stats">
+                    <p>Max Height: <span id="stat-max">20.0</span> ft</p>
+                    <p>Min Height: <span id="stat-min">0.0</span> ft</p>
+                    <p>Avg Slope: <span id="stat-slope">--</span>&deg;</p>
+                    <p>Total Area: <span id="stat-area">--</span> sq ft</p>
+                </div>
+            </div>
+            <div class="tool-section">
+                <h3>Elevation Profile</h3>
+                <canvas id="profile-canvas" width="250" height="120"></canvas>
+            </div>
+            <div class="tool-section">
+                <h3>Legend</h3>
+                <div id="legend">
+                    <div class="legend-item"><span class="legend-color" style="background: #2d5a27;"></span> High (House level)</div>
+                    <div class="legend-item"><span class="legend-color" style="background: #4a8c3f;"></span> Mid slope</div>
+                    <div class="legend-item"><span class="legend-color" style="background: #7ab648;"></span> Low slope</div>
+                    <div class="legend-item"><span class="legend-color" style="background: #c2b280;"></span> Beach</div>
+                    <div class="legend-item"><span class="legend-color" style="background: #4a90d9;"></span> Water</div>
+                    <div class="legend-item"><span class="legend-color" style="background: #8B4513;"></span> Wood structures</div>
+                </div>
+            </div>
+            <div class="tool-section">
+                <h3>Structures List</h3>
+                <ul id="structures-list">
+                    <li class="hint">No structures placed yet</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import maps for Three.js -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+    <script type="module" src="app.js"></script>
+</body>
+</html>
