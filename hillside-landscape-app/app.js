@@ -494,91 +494,92 @@ class HillsideLandscapeApp {
 
 
     createExistingStairs() {
-        // Existing wooden stairs going down the hillside (left-center of the slope)
-        // These match the stairs visible in the photo and sketch
+        // Existing wooden stairs going down the hillside
+        // From the photo: stairs are to the LEFT (when viewing from lake)
+        // They go from the upper flat area (near patio level ~15ft) 
+        // down the slope to the beach/dock level (~1.5ft)
+        // Total rise ~13.5ft over a horizontal run of about 20ft
         const stairs = new THREE.Group();
         stairs.userData = { type: 'existing-stairs', fixed: true };
 
-        const stepCount = 18;
+        const totalRise = 13.5;   // feet of elevation change
+        const totalRun = 22;      // horizontal distance along slope
+        const stepCount = 22;     // number of steps
         const stepWidth = 3.5;
-        const stepDepth = 1.0;
-        const risePerStep = 0.6;
+        const risePerStep = totalRise / stepCount;
+        const runPerStep = totalRun / stepCount;
         const woodColor = 0xC4A35A;
         const stringerColor = 0x8B6914;
 
-        // Stairs follow the slope, with a landing/turn midway
-        // Lower section: 10 steps straight down
-        for (let i = 0; i < 10; i++) {
-            const stepGeom = new THREE.BoxGeometry(stepWidth, 0.15, stepDepth);
+        // Create steps descending along the Z axis (toward lake)
+        for (let i = 0; i < stepCount; i++) {
+            const stepGeom = new THREE.BoxGeometry(stepWidth, 0.18, 0.9);
             const stepMat = new THREE.MeshStandardMaterial({ color: woodColor, roughness: 0.75 });
             const step = new THREE.Mesh(stepGeom, stepMat);
-            step.position.set(0, i * risePerStep + 0.1, i * stepDepth * 0.9);
+            // Each step goes down in Y and forward in Z
+            step.position.set(0, totalRise - i * risePerStep, i * runPerStep);
             step.castShadow = true;
             step.receiveShadow = true;
             stairs.add(step);
         }
 
-        // Left stringer
-        const lowerStringerLen = Math.sqrt((10 * risePerStep) ** 2 + (10 * stepDepth * 0.9) ** 2);
-        const lowerAngle = Math.atan2(10 * risePerStep, 10 * stepDepth * 0.9);
-        const lStringerGeom = new THREE.BoxGeometry(0.15, 0.8, lowerStringerLen);
-        const lStringerMat = new THREE.MeshStandardMaterial({ color: stringerColor, roughness: 0.8 });
-        
-        const leftStringer = new THREE.Mesh(lStringerGeom, lStringerMat);
-        leftStringer.position.set(-stepWidth / 2 - 0.1, 5 * risePerStep, 4.5);
-        leftStringer.rotation.x = -lowerAngle;
-        leftStringer.castShadow = true;
-        stairs.add(leftStringer);
-
-        const rightStringer = leftStringer.clone();
-        rightStringer.position.x = stepWidth / 2 + 0.1;
-        stairs.add(rightStringer);
-
-        // Landing platform
-        const landingGeom = new THREE.BoxGeometry(4.5, 0.2, 3);
+        // Landing platform halfway down
+        const landingGeom = new THREE.BoxGeometry(4.5, 0.22, 3.5);
         const landingMat = new THREE.MeshStandardMaterial({ color: woodColor, roughness: 0.75 });
         const landing = new THREE.Mesh(landingGeom, landingMat);
-        landing.position.set(0, 10 * risePerStep, 10 * stepDepth * 0.9 + 1.5);
+        landing.position.set(0, totalRise * 0.5, totalRun * 0.5);
         landing.castShadow = true;
         stairs.add(landing);
 
-        // Upper section: 8 more steps (slightly angled)
-        for (let i = 0; i < 8; i++) {
-            const stepGeom = new THREE.BoxGeometry(stepWidth, 0.15, stepDepth);
-            const stepMat = new THREE.MeshStandardMaterial({ color: woodColor, roughness: 0.75 });
-            const step = new THREE.Mesh(stepGeom, stepMat);
-            step.position.set(
-                -1.5,
-                10 * risePerStep + (i + 1) * risePerStep,
-                10 * stepDepth * 0.9 + 3 + i * stepDepth * 0.9
+        // Side stringers (angled boards along the run)
+        const stringerLen = Math.sqrt(totalRise ** 2 + totalRun ** 2);
+        const stringerAngle = Math.atan2(totalRise, totalRun);
+        [-1, 1].forEach(side => {
+            const sGeom = new THREE.BoxGeometry(0.15, 0.7, stringerLen);
+            const sMat = new THREE.MeshStandardMaterial({ color: stringerColor, roughness: 0.8 });
+            const stringer = new THREE.Mesh(sGeom, sMat);
+            stringer.position.set(
+                side * (stepWidth / 2 + 0.15),
+                totalRise / 2 + 0.3,
+                totalRun / 2
             );
-            step.castShadow = true;
-            stairs.add(step);
-        }
+            stringer.rotation.x = stringerAngle;
+            stringer.castShadow = true;
+            stairs.add(stringer);
+        });
 
-        // Railing posts along left side
-        for (let i = 0; i < stepCount; i += 3) {
-            const postGeom = new THREE.BoxGeometry(0.2, 3, 0.2);
+        // Railing posts along the left side
+        for (let i = 0; i <= stepCount; i += 3) {
+            const postGeom = new THREE.BoxGeometry(0.18, 3.2, 0.18);
             const postMat = new THREE.MeshStandardMaterial({ color: stringerColor, roughness: 0.8 });
             const post = new THREE.Mesh(postGeom, postMat);
-            let px, py, pz;
-            if (i < 10) {
-                px = -stepWidth / 2 - 0.3;
-                py = i * risePerStep + 1.5;
-                pz = i * stepDepth * 0.9;
-            } else {
-                px = -stepWidth / 2 - 0.3 - 1.5;
-                py = i * risePerStep + 1.5;
-                pz = 10 * stepDepth * 0.9 + 3 + (i - 10) * stepDepth * 0.9;
-            }
-            post.position.set(px, py, pz);
+            post.position.set(
+                -(stepWidth / 2 + 0.3),
+                totalRise - i * risePerStep + 1.6,
+                i * runPerStep
+            );
             post.castShadow = true;
             stairs.add(post);
         }
 
-        // Position stairs on the slope (left of center when viewed from lake)
-        stairs.position.set(-8, 1.5, 5);
-        stairs.rotation.y = Math.PI; // face toward lake
+        // Top rail along left side
+        const railLen = Math.sqrt(totalRise ** 2 + totalRun ** 2);
+        const railGeom = new THREE.BoxGeometry(0.12, 0.12, railLen);
+        const railMat = new THREE.MeshStandardMaterial({ color: stringerColor, roughness: 0.7 });
+        const topRail = new THREE.Mesh(railGeom, railMat);
+        topRail.position.set(
+            -(stepWidth / 2 + 0.3),
+            totalRise / 2 + 3.0,
+            totalRun / 2
+        );
+        topRail.rotation.x = stringerAngle;
+        stairs.add(topRail);
+
+        // Position: left side of property, starting at upper patio level
+        // x = negative is LEFT when viewed from lake
+        // z = higher value is closer to lake
+        // Starts near z=-2 (patio edge) and goes to z=+20 (near beach)
+        stairs.position.set(-16, 1.5, -2);
         this.scene.add(stairs);
         this.siteStructures.push(stairs);
     }
@@ -633,8 +634,8 @@ class HillsideLandscapeApp {
         extension.castShadow = true;
         dock.add(extension);
 
-        // Position at beach level
-        dock.position.set(-8, -0.5, 22);
+        // Position at beach level, to the left (matching photo - dock is left of stairs)
+        dock.position.set(-18, -0.3, 23);
         this.scene.add(dock);
         this.siteStructures.push(dock);
     }
@@ -1411,13 +1412,44 @@ class HillsideLandscapeApp {
 
     // ============================================================
     // EVENT LISTENERS
+    // Controls: 
+    //   Left-click drag = Orbit/Rotate camera (default)
+    //   Shift + Left-click = Edit terrain / Place structures
+    //   Right-click drag = Pan camera
+    //   Scroll = Zoom
     // ============================================================
 
     setupEventListeners() {
         const canvas = document.getElementById('three-canvas');
 
+        // Track shift key state for edit mode
+        this.shiftHeld = false;
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Shift') {
+                this.shiftHeld = true;
+                // Disable orbit controls while shift is held so we can edit
+                this.controls.enabled = false;
+            }
+            if (e.ctrlKey && e.key === 'z') {
+                e.preventDefault();
+                this.undo();
+            } else if (e.ctrlKey && e.key === 'y') {
+                e.preventDefault();
+                this.redo();
+            } else if (e.key === 'Delete') {
+                this.deleteSelectedStructure();
+            }
+        });
+        document.addEventListener('keyup', (e) => {
+            if (e.key === 'Shift') {
+                this.shiftHeld = false;
+                this.controls.enabled = true;
+            }
+        });
+
         canvas.addEventListener('mousedown', (e) => {
-            if (e.button === 0) {
+            if (e.button === 0 && this.shiftHeld) {
+                // Shift+Left click = terrain edit
                 this.isEditing = true;
                 this.handleTerrainEdit(e);
             }
@@ -1435,7 +1467,7 @@ class HillsideLandscapeApp {
             } else {
                 this.updateBrushMarker(null);
             }
-            if (this.isEditing) {
+            if (this.isEditing && this.shiftHeld) {
                 this.handleTerrainEdit(e);
             }
         });
@@ -1452,18 +1484,6 @@ class HillsideLandscapeApp {
         canvas.addEventListener('mouseleave', () => {
             this.isEditing = false;
             this.updateBrushMarker(null);
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (e.ctrlKey && e.key === 'z') {
-                e.preventDefault();
-                this.undo();
-            } else if (e.ctrlKey && e.key === 'y') {
-                e.preventDefault();
-                this.redo();
-            } else if (e.key === 'Delete') {
-                this.deleteSelectedStructure();
-            }
         });
     }
 
