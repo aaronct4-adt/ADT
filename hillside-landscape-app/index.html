@@ -86,6 +86,7 @@
                 <button id="btn-undo" class="tool-btn">Undo</button>
                 <button id="btn-redo" class="tool-btn">Redo</button>
                 <button id="btn-export" class="tool-btn">Export Data</button>
+                <button id="btn-import" class="tool-btn">Import Data</button>
                 <button id="btn-toggle-grid" class="tool-btn">Toggle Grid</button>
                 <button id="btn-toggle-wireframe" class="tool-btn">Wireframe</button>
             </div>
@@ -118,7 +119,16 @@
             </div>
             <div class="tool-section">
                 <h3>Elevation Profile</h3>
-                <canvas id="profile-canvas" width="250" height="120"></canvas>
+                <div class="slider-group">
+                    <label>Cross-section position: <span id="slice-pos-val">50</span>%</label>
+                    <input type="range" id="slice-pos" min="0" max="100" value="50" step="1">
+                </div>
+                <div class="tool-group">
+                    <button id="btn-slice-xz" class="tool-btn active">House→Lake</button>
+                    <button id="btn-slice-lr" class="tool-btn">Left→Right</button>
+                </div>
+                <canvas id="profile-canvas" width="250" height="140"></canvas>
+                <p style="font-size:10px;color:#888;margin-top:4px;">Click &amp; drag on profile to edit terrain at that cross-section</p>
             </div>
             <div class="tool-section">
                 <h3>Structures</h3>

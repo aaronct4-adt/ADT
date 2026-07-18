@@ -47,10 +47,20 @@ class App {
         // History
         this.history = [];
         this.historyIdx = -1;
+        // Structure deletion undo stack
+        this.deletedStructures = [];
 
         // Grid
         this.gridHelper = null;
         this.gridVisible = false;
+        // Rear and side grids
+        this.rearGrid = null;
+        this.sideGrid = null;
+
+        // Cross-section editor
+        this.sliceDirection = 'xz'; // 'xz' = house-to-lake, 'lr' = left-to-right
+        this.slicePosition = 50; // percentage along the perpendicular axis
+        this.profileEditing = false;
 
         this.init();
     }
@@ -65,6 +75,7 @@ class App {
         this.createSiteStructures();
         this.setupEvents();
         this.setupUI();
+        this.setupProfileInteraction();
         this.saveHistory();
         this.updateStats();
         this.updateProfile();
@@ -219,10 +230,32 @@ class App {
     }
 
     setupGrid() {
+        // Floor grid
         this.gridHelper = new THREE.GridHelper(70, 35, 0x444444, 0x333333);
         this.gridHelper.position.y = 0.1;
         this.gridHelper.visible = this.gridVisible;
         this.scene.add(this.gridHelper);
+
+        // Rear grid (vertical, at the back — shows elevation from the side)
+        const rearGridGeo = new THREE.PlaneGeometry(70, 25);
+        const rearGridMat = new THREE.MeshBasicMaterial({
+            color: 0x333355, transparent: true, opacity: 0.15, side: THREE.DoubleSide, wireframe: true
+        });
+        this.rearGrid = new THREE.Mesh(rearGridGeo, rearGridMat);
+        this.rearGrid.position.set(0, 12.5, -this.terrainDepth/2);
+        this.rearGrid.visible = this.gridVisible;
+        this.scene.add(this.rearGrid);
+
+        // Side grid (vertical, on the left — shows elevation profile)
+        const sideGridGeo = new THREE.PlaneGeometry(55, 25);
+        const sideGridMat = new THREE.MeshBasicMaterial({
+            color: 0x335533, transparent: true, opacity: 0.15, side: THREE.DoubleSide, wireframe: true
+        });
+        this.sideGrid = new THREE.Mesh(sideGridGeo, sideGridMat);
+        this.sideGrid.rotation.y = Math.PI / 2;
+        this.sideGrid.position.set(-this.terrainWidth/2, 12.5, 0);
+        this.sideGrid.visible = this.gridVisible;
+        this.scene.add(this.sideGrid);
     }
 
     getTerrainHeightAt(x, z) {
@@ -256,8 +289,9 @@ class App {
     }
 
     addHouse(x, z) {
+        // HOUSE BODY (walls, roof, windows, chimney) - separate from deck
         const g = new THREE.Group();
-        g.userData = { type: 'house', label: 'House' };
+        g.userData = { type: 'house', label: 'House (body)' };
         const W = 28, D = 18, wallH = 12, deckH = 7;
         // Posts
         for (let px = -12; px <= 12; px += 6)
@@ -278,19 +312,6 @@ class App {
         roof.position.set(0, deckH+wallH, -D/2-0.5);
         roof.castShadow = true;
         g.add(roof);
-        // Deck
-        const deck = this.box(W+6, 0.3, D+6, 0xBFA76F);
-        deck.position.y = deckH;
-        g.add(deck);
-        // Railing (front)
-        for (let rx = -W/2-3; rx <= W/2+3; rx += 2) {
-            const post = this.box(0.15, 3.2, 0.15, 0xBFA76F);
-            post.position.set(rx, deckH+1.6, D/2+3);
-            g.add(post);
-        }
-        const topR = this.box(W+6, 0.12, 0.12, 0xBFA76F);
-        topR.position.set(0, deckH+3.2, D/2+3);
-        g.add(topR);
         // Windows
         const wm = new THREE.MeshStandardMaterial({color:0x88ccff,roughness:0.1,metalness:0.3});
         const uw = new THREE.Mesh(new THREE.BoxGeometry(5,4,0.2), wm);
@@ -309,40 +330,77 @@ class App {
         const tH = this.getTerrainHeightAt(x, z);
         g.position.set(x, tH, z);
         this.registerStructure(g);
+
+        // DECK (separate structure so it can be moved independently)
+        this.addUpperDeck(x, z);
+    }
+
+    addUpperDeck(x, z) {
+        const g = new THREE.Group();
+        g.userData = { type: 'deck', label: 'Upper Deck' };
+        const W = 28, D = 18, deckH = 7;
+        // Deck surface
+        const deck = this.box(W+6, 0.3, D+6, 0xBFA76F);
+        deck.position.y = deckH;
+        g.add(deck);
+        // Railing (front)
+        for (let rx = -W/2-3; rx <= W/2+3; rx += 2) {
+            const post = this.box(0.15, 3.2, 0.15, 0xBFA76F);
+            post.position.set(rx, deckH+1.6, D/2+3);
+            g.add(post);
+        }
+        const topR = this.box(W+6, 0.12, 0.12, 0xBFA76F);
+        topR.position.set(0, deckH+3.2, D/2+3);
+        g.add(topR);
+        // Side railings
+        for (let rz = -D/2-3; rz <= D/2+3; rz += 2) {
+            const postL = this.box(0.15, 3.2, 0.15, 0xBFA76F);
+            postL.position.set(-W/2-3, deckH+1.6, rz);
+            g.add(postL);
+            const postR = this.box(0.15, 3.2, 0.15, 0xBFA76F);
+            postR.position.set(W/2+3, deckH+1.6, rz);
+            g.add(postR);
+        }
+
+        const tH = this.getTerrainHeightAt(x, z);
+        g.position.set(x, tH, z);
+        this.registerStructure(g);
     }
 
     addExistingStairs(x, z) {
         const g = new THREE.Group();
         g.userData = { type: 'stairs', label: 'Existing Stairs' };
         const wc = 0xC4A35A, sc = 0x8B6914, sw = 3.5;
-        // Upper run: 8 steps going toward lake (+Z)
+        // Upper run: 8 steps going DOWN toward the lake (+Z direction)
         const uSteps = 8, uRise = 5, uRun = 8;
         for (let i = 0; i < uSteps; i++) {
             const s = this.box(sw, 0.18, 0.85, wc);
-            s.position.set(0, uRise - i*(uRise/uSteps), i*(uRun/uSteps));
+            s.position.set(0, -i*(uRise/uSteps), i*(uRun/uSteps));
             g.add(s);
         }
-        // Landing
+        // Landing platform (at bottom of upper run)
+        const landY = -(uRise);
+        const landZ = uRun;
         const land = this.box(5, 0.22, 4, wc);
-        land.position.set(0, 0, uRun+1.5);
+        land.position.set(0, landY, landZ + 1.5);
         g.add(land);
-        // Lower run: pivots left, 12 steps going in -X direction
+        // Lower run: pivots LEFT (−X direction), continues descending toward dock
         const lSteps = 12, lRise = 8, lRun = 12;
         for (let i = 0; i < lSteps; i++) {
             const s = this.box(0.85, 0.18, sw, wc);
-            s.position.set(-(i+1)*(lRun/lSteps), -(i+1)*(lRise/lSteps), uRun+2);
+            s.position.set(-(i+1)*(lRun/lSteps), landY -(i+1)*(lRise/lSteps), landZ + 2);
             g.add(s);
         }
-        // Railing posts upper (left side)
+        // Railing posts upper run (left side)
         for (let i = 0; i <= uSteps; i += 2) {
             const p = this.box(0.15, 3.2, 0.15, sc);
-            p.position.set(-sw/2-0.2, uRise - i*(uRise/uSteps)+1.6, i*(uRun/uSteps));
+            p.position.set(-sw/2-0.2, -i*(uRise/uSteps)+1.6, i*(uRun/uSteps));
             g.add(p);
         }
-        // Railing posts lower (lake side)
+        // Railing posts lower run (lake-facing side)
         for (let i = 0; i <= lSteps; i += 3) {
             const p = this.box(0.15, 3.2, 0.15, sc);
-            p.position.set(-(i+1)*(lRun/lSteps), -(i+1)*(lRise/lSteps)+1.6, uRun+2+sw/2+0.2);
+            p.position.set(-(i+1)*(lRun/lSteps), landY-(i+1)*(lRise/lSteps)+1.6, landZ+2+sw/2+0.2);
             g.add(p);
         }
         const tH = this.getTerrainHeightAt(x, z);
@@ -558,7 +616,9 @@ class App {
     }
 
     deleteSelected() {
+        // Save deleted structures for undo
         this.selected.forEach(s => {
+            this.deletedStructures.push({ struct: s, position: s.position.clone(), rotation: s.rotation.y });
             this.scene.remove(s);
             this.structures = this.structures.filter(st => st !== s);
         });
@@ -742,7 +802,20 @@ class App {
         if (this.history.length > 30) this.history.shift();
         this.historyIdx = this.history.length - 1;
     }
-    undo() { if(this.historyIdx>0){this.historyIdx--;this.heightData=[...this.history[this.historyIdx]];this.refreshTerrain();} }
+    undo() {
+        // First check if there are deleted structures to restore
+        if (this.deletedStructures.length > 0) {
+            const last = this.deletedStructures.pop();
+            last.struct.position.copy(last.position);
+            last.struct.rotation.y = last.rotation;
+            this.scene.add(last.struct);
+            this.structures.push(last.struct);
+            this.updateStructuresList();
+            return;
+        }
+        // Otherwise undo terrain
+        if(this.historyIdx>0){this.historyIdx--;this.heightData=[...this.history[this.historyIdx]];this.refreshTerrain();}
+    }
     redo() { if(this.historyIdx<this.history.length-1){this.historyIdx++;this.heightData=[...this.history[this.historyIdx]];this.refreshTerrain();} }
 
 
@@ -923,20 +996,24 @@ class App {
         document.getElementById('btn-undo').addEventListener('click', () => this.undo());
         document.getElementById('btn-redo').addEventListener('click', () => this.redo());
         document.getElementById('btn-export').addEventListener('click', () => this.exportData());
-        document.getElementById('btn-toggle-grid').addEventListener('click', () => { this.gridVisible=!this.gridVisible; this.gridHelper.visible=this.gridVisible; });
+        document.getElementById('btn-import').addEventListener('click', () => this.importData());
+        document.getElementById('btn-toggle-grid').addEventListener('click', () => { this.gridVisible=!this.gridVisible; this.gridHelper.visible=this.gridVisible; this.rearGrid.visible=this.gridVisible; this.sideGrid.visible=this.gridVisible; });
         document.getElementById('btn-toggle-wireframe').addEventListener('click', () => { this.terrainMat.wireframe=!this.terrainMat.wireframe; });
     }
 
     setMode(mode) {
         this.mode = mode;
-        document.querySelectorAll('#toolbar .tool-section:first-child .tool-btn').forEach(b=>b.classList.remove('active'));
+        // Fix: deselect ALL mode buttons, then highlight current
+        ['camera','terrain','select','place'].forEach(m => {
+            document.getElementById(`btn-mode-${m}`).classList.remove('active');
+        });
         document.getElementById(`btn-mode-${mode}`).classList.add('active');
         // Show/hide relevant sections
         document.getElementById('terrain-tools-section').style.display = mode==='terrain'?'':'none';
         document.getElementById('place-tools-section').style.display = mode==='place'?'':'none';
         document.getElementById('select-tools-section').style.display = mode==='select'?'':'none';
-        // Controls
-        this.controls.enabled = (mode === 'camera');
+        // Controls: orbit enabled in camera mode AND select mode (for when not dragging)
+        this.controls.enabled = (mode === 'camera' || mode === 'select');
         this.brushMarker.visible = false;
         // Mode info
         const labels = {camera:'Camera (rotate/zoom)',terrain:'Terrain Edit',select:'Select/Move',place:`Place: ${this.placeType||'(pick item)'}`};
@@ -1005,15 +1082,141 @@ class App {
         const w = canvas.width, h = canvas.height;
         ctx.clearRect(0,0,w,h);
         ctx.fillStyle = '#0d1b2a'; ctx.fillRect(0,0,w,h);
-        const s = this.segments, ci = Math.floor(s*0.45);
-        ctx.beginPath(); ctx.strokeStyle='#4fc3f7'; ctx.lineWidth=2;
-        for(let j=0;j<=s;j++){const idx=j*(s+1)+ci;const px=(j/s)*w;const py=h-(this.heightData[idx]/20)*(h-15)-5;j===0?ctx.moveTo(px,py):ctx.lineTo(px,py);}
-        ctx.stroke();
-        ctx.beginPath(); ctx.strokeStyle='rgba(255,255,100,0.35)'; ctx.lineWidth=1; ctx.setLineDash([4,4]);
-        for(let j=0;j<=s;j++){const idx=j*(s+1)+ci;const px=(j/s)*w;const py=h-(this.originalHeightData[idx]/20)*(h-15)-5;j===0?ctx.moveTo(px,py):ctx.lineTo(px,py);}
-        ctx.stroke(); ctx.setLineDash([]);
-        ctx.fillStyle='#666'; ctx.font='9px sans-serif';
-        ctx.fillText('House',2,10); ctx.fillText('Slope',w*0.55,10); ctx.fillText('Beach',w*0.82,10);
+        const s = this.segments;
+        // Determine which slice to draw based on direction and position
+        const sliceNorm = this.slicePosition / 100;
+
+        if (this.sliceDirection === 'xz') {
+            // House→Lake (along Z axis), slice position is X position
+            const ci = Math.floor(s * sliceNorm);
+            // Current
+            ctx.beginPath(); ctx.strokeStyle='#4fc3f7'; ctx.lineWidth=2;
+            for(let j=0;j<=s;j++){const idx=j*(s+1)+ci;const px=(j/s)*w;const py=h-(this.heightData[idx]/20)*(h-20)-8;j===0?ctx.moveTo(px,py):ctx.lineTo(px,py);}
+            ctx.stroke();
+            // Original
+            ctx.beginPath(); ctx.strokeStyle='rgba(255,255,100,0.35)'; ctx.lineWidth=1; ctx.setLineDash([4,4]);
+            for(let j=0;j<=s;j++){const idx=j*(s+1)+ci;const px=(j/s)*w;const py=h-(this.originalHeightData[idx]/20)*(h-20)-8;j===0?ctx.moveTo(px,py):ctx.lineTo(px,py);}
+            ctx.stroke(); ctx.setLineDash([]);
+            // Labels
+            ctx.fillStyle='#666'; ctx.font='9px sans-serif';
+            ctx.fillText('House',2,10); ctx.fillText('Slope',w*0.55,10); ctx.fillText('Beach',w*0.82,10);
+        } else {
+            // Left→Right (along X axis), slice position is Z position
+            const cj = Math.floor(s * sliceNorm);
+            ctx.beginPath(); ctx.strokeStyle='#4fc3f7'; ctx.lineWidth=2;
+            for(let i=0;i<=s;i++){const idx=cj*(s+1)+i;const px=(i/s)*w;const py=h-(this.heightData[idx]/20)*(h-20)-8;i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);}
+            ctx.stroke();
+            ctx.beginPath(); ctx.strokeStyle='rgba(255,255,100,0.35)'; ctx.lineWidth=1; ctx.setLineDash([4,4]);
+            for(let i=0;i<=s;i++){const idx=cj*(s+1)+i;const px=(i/s)*w;const py=h-(this.originalHeightData[idx]/20)*(h-20)-8;i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);}
+            ctx.stroke(); ctx.setLineDash([]);
+            ctx.fillStyle='#666'; ctx.font='9px sans-serif';
+            ctx.fillText('Left',2,10); ctx.fillText('Right',w-30,10);
+        }
+        // Draw a line showing position
+        ctx.fillStyle='#4fc3f7'; ctx.font='9px sans-serif';
+        ctx.fillText(`Slice: ${this.slicePosition}%`, w-60, h-3);
+
+        // Draw vertical scale marks
+        ctx.strokeStyle = 'rgba(255,255,255,0.1)'; ctx.lineWidth = 0.5;
+        for (let ft = 0; ft <= 20; ft += 5) {
+            const y = h - (ft/20)*(h-20) - 8;
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+            ctx.fillStyle='#555'; ctx.fillText(`${ft}'`, 0, y-2);
+        }
+    }
+
+    setupProfileInteraction() {
+        const canvas = document.getElementById('profile-canvas');
+        let isDragging = false;
+
+        canvas.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            this.editProfileAt(e);
+        });
+        canvas.addEventListener('mousemove', (e) => {
+            if (isDragging) this.editProfileAt(e);
+        });
+        canvas.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                this.saveHistory();
+                this.updateStats();
+            }
+        });
+        canvas.addEventListener('mouseleave', () => { isDragging = false; });
+
+        // Slice controls
+        document.getElementById('slice-pos').addEventListener('input', (e) => {
+            this.slicePosition = +e.target.value;
+            document.getElementById('slice-pos-val').textContent = this.slicePosition;
+            this.updateProfile();
+        });
+        document.getElementById('btn-slice-xz').addEventListener('click', () => {
+            this.sliceDirection = 'xz';
+            document.getElementById('btn-slice-xz').classList.add('active');
+            document.getElementById('btn-slice-lr').classList.remove('active');
+            this.updateProfile();
+        });
+        document.getElementById('btn-slice-lr').addEventListener('click', () => {
+            this.sliceDirection = 'lr';
+            document.getElementById('btn-slice-lr').classList.add('active');
+            document.getElementById('btn-slice-xz').classList.remove('active');
+            this.updateProfile();
+        });
+    }
+
+    editProfileAt(e) {
+        const canvas = document.getElementById('profile-canvas');
+        const rect = canvas.getBoundingClientRect();
+        const mx = (e.clientX - rect.left) / rect.width;  // 0-1 along the profile
+        const my = 1 - (e.clientY - rect.top) / rect.height; // 0-1 from bottom
+        const targetHeight = my * 20; // map to 0-20 ft
+        const s = this.segments;
+        const sliceNorm = this.slicePosition / 100;
+
+        // Edit a band of vertices around the click position
+        const brushWidth = 3; // how many vertices wide the brush is
+        const pos = this.terrainGeom.attributes.position.array;
+
+        if (this.sliceDirection === 'xz') {
+            const ci = Math.floor(s * sliceNorm);
+            const targetJ = Math.floor(mx * s);
+            for (let dj = -brushWidth; dj <= brushWidth; dj++) {
+                const j = targetJ + dj;
+                if (j < 0 || j > s) continue;
+                const falloff = 1 - Math.abs(dj) / (brushWidth + 1);
+                for (let di = -1; di <= 1; di++) {
+                    const i = ci + di;
+                    if (i < 0 || i > s) continue;
+                    const idx = j * (s + 1) + i;
+                    const diff = targetHeight - this.heightData[idx];
+                    this.heightData[idx] += diff * falloff * 0.3;
+                    pos[idx * 3 + 1] = this.heightData[idx];
+                }
+            }
+        } else {
+            const cj = Math.floor(s * sliceNorm);
+            const targetI = Math.floor(mx * s);
+            for (let di = -brushWidth; di <= brushWidth; di++) {
+                const i = targetI + di;
+                if (i < 0 || i > s) continue;
+                const falloff = 1 - Math.abs(di) / (brushWidth + 1);
+                for (let dj = -1; dj <= 1; dj++) {
+                    const j = cj + dj;
+                    if (j < 0 || j > s) continue;
+                    const idx = j * (s + 1) + i;
+                    const diff = targetHeight - this.heightData[idx];
+                    this.heightData[idx] += diff * falloff * 0.3;
+                    pos[idx * 3 + 1] = this.heightData[idx];
+                }
+            }
+        }
+
+        this.terrainGeom.attributes.position.needsUpdate = true;
+        this.terrainGeom.computeVertexNormals();
+        this.colorTerrain();
+        this.terrainGeom.attributes.color.needsUpdate = true;
+        this.updateProfile();
     }
 
     exportData() {
@@ -1022,6 +1225,38 @@ class App {
         };
         const blob = new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
         const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='hillside-data.json'; a.click();
+    }
+
+    importData() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                try {
+                    const data = JSON.parse(ev.target.result);
+                    if (data.terrain && data.terrain.heightData) {
+                        this.heightData = data.terrain.heightData;
+                        this.refreshTerrain();
+                        this.saveHistory();
+                    }
+                    // Note: structure positions are logged but full import of
+                    // structure geometry would require matching by type.
+                    // For now we just restore terrain.
+                    if (data.structures) {
+                        console.log('Imported structure positions:', data.structures);
+                        alert(`Terrain imported. ${data.structures.length} structure positions logged to console (move them manually to match).`);
+                    }
+                } catch(err) {
+                    alert('Error reading file: ' + err.message);
+                }
+            };
+            reader.readAsText(file);
+        });
+        input.click();
     }
 
     // ============================================================
