@@ -223,12 +223,22 @@ class App {
     }
 
     createBrushMarker() {
-        const g = new THREE.RingGeometry(0.8, 1, 32);
-        const m = new THREE.MeshBasicMaterial({ color: 0xffff00, side: THREE.DoubleSide, transparent: true, opacity: 0.6 });
+        // Use a disc/ring that represents the actual brush radius
+        // Inner radius slightly smaller than outer for a clear ring
+        const g = new THREE.RingGeometry(0.85, 1, 48);
+        const m = new THREE.MeshBasicMaterial({ color: 0xffff00, side: THREE.DoubleSide, transparent: true, opacity: 0.7 });
         this.brushMarker = new THREE.Mesh(g, m);
         this.brushMarker.rotation.x = -Math.PI / 2;
         this.brushMarker.visible = false;
         this.scene.add(this.brushMarker);
+
+        // Add a filled disc inside for better visibility
+        const fillGeo = new THREE.CircleGeometry(0.85, 48);
+        const fillMat = new THREE.MeshBasicMaterial({ color: 0xffff00, side: THREE.DoubleSide, transparent: true, opacity: 0.12 });
+        this.brushFill = new THREE.Mesh(fillGeo, fillMat);
+        this.brushFill.rotation.x = -Math.PI / 2;
+        this.brushFill.visible = false;
+        this.scene.add(this.brushFill);
     }
 
     setupGrid() {
@@ -1005,9 +1015,13 @@ class App {
                     this.brushMarker.position.set(hit.point.x, hit.point.y+0.3, hit.point.z);
                     this.brushMarker.scale.setScalar(this.brushSize);
                     this.brushMarker.visible = true;
+                    this.brushFill.position.set(hit.point.x, hit.point.y+0.25, hit.point.z);
+                    this.brushFill.scale.setScalar(this.brushSize);
+                    this.brushFill.visible = true;
                 }
             } else {
                 this.brushMarker.visible = false;
+                this.brushFill.visible = false;
             }
 
             if (isTerrainEditing && this.mode === 'terrain') {
@@ -1080,6 +1094,8 @@ class App {
                 this.terrainTool = t;
                 document.querySelectorAll('#terrain-tools-section .tool-group .tool-btn').forEach(b=>b.classList.remove('active'));
                 document.getElementById(`btn-${t}`).classList.add('active');
+                // Show/hide Target Height slider (only relevant for Flatten)
+                document.getElementById('target-height-group').style.display = (t === 'flatten') ? '' : 'none';
             });
         });
         // Sliders
@@ -1139,6 +1155,7 @@ class App {
         // Controls: orbit enabled in camera mode AND select mode (for when not dragging)
         this.controls.enabled = (mode === 'camera' || mode === 'select');
         this.brushMarker.visible = false;
+        if (this.brushFill) this.brushFill.visible = false;
         // Mode info
         const labels = {camera:'Camera (rotate/zoom)',terrain:'Terrain Edit',select:'Select/Move',place:`Place: ${this.placeType||'(pick item)'}`};
         document.getElementById('mode-info').textContent = `Mode: ${labels[mode]}`;
