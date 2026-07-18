@@ -1226,10 +1226,13 @@ class App {
         const s = this.segments;
         // Determine which slice to draw based on direction and position
         const sliceNorm = this.slicePosition / 100;
+        const hw = this.terrainWidth / 2;
+        const hd = this.terrainDepth / 2;
 
         if (this.sliceDirection === 'xz') {
             // House→Lake (along Z axis), slice position is X position
             const ci = Math.floor(s * sliceNorm);
+            const sliceX = sliceNorm * this.terrainWidth - hw;
             // Current
             ctx.beginPath(); ctx.strokeStyle='#4fc3f7'; ctx.lineWidth=2;
             for(let j=0;j<=s;j++){const idx=j*(s+1)+ci;const px=(j/s)*w;const py=h-(this.heightData[idx]/20)*(h-20)-8;j===0?ctx.moveTo(px,py):ctx.lineTo(px,py);}
@@ -1241,9 +1244,13 @@ class App {
             // Labels
             ctx.fillStyle='#666'; ctx.font='9px sans-serif';
             ctx.fillText('House',2,10); ctx.fillText('Slope',w*0.55,10); ctx.fillText('Beach',w*0.82,10);
+
+            // Draw structures that intersect this slice
+            this.drawStructuresOnProfile(ctx, w, h, 'xz', sliceX);
         } else {
             // Left→Right (along X axis), slice position is Z position
             const cj = Math.floor(s * sliceNorm);
+            const sliceZ = sliceNorm * this.terrainDepth - hd;
             ctx.beginPath(); ctx.strokeStyle='#4fc3f7'; ctx.lineWidth=2;
             for(let i=0;i<=s;i++){const idx=cj*(s+1)+i;const px=(i/s)*w;const py=h-(this.heightData[idx]/20)*(h-20)-8;i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);}
             ctx.stroke();
@@ -1252,8 +1259,11 @@ class App {
             ctx.stroke(); ctx.setLineDash([]);
             ctx.fillStyle='#666'; ctx.font='9px sans-serif';
             ctx.fillText('Left',2,10); ctx.fillText('Right',w-30,10);
+
+            // Draw structures that intersect this slice
+            this.drawStructuresOnProfile(ctx, w, h, 'lr', sliceZ);
         }
-        // Draw a line showing position
+        // Slice position label
         ctx.fillStyle='#4fc3f7'; ctx.font='9px sans-serif';
         ctx.fillText(`Slice: ${this.slicePosition}%`, w-60, h-3);
 
@@ -1264,6 +1274,233 @@ class App {
             ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
             ctx.fillStyle='#555'; ctx.fillText(`${ft}'`, 0, y-2);
         }
+    }
+
+    drawStructuresOnProfile(ctx, canvasW, canvasH, direction, sliceWorldPos) {
+        // Draw structures that are near the slice as colored markers
+        const proximity = 4; // how close (in feet) a structure must be to the slice to show
+        const hw = this.terrainWidth / 2;
+        const hd = this.terrainDepth / 2;
+
+        // Color map for structure types
+        const typeColors = {
+            'house': '#ff6b6b',
+            'deck': '#ffa94d',
+            'stairs': '#ffe066',
+            'dock': '#74c0fc',
+            'patio': '#adb5bd',
+            'tree': '#69db7c',
+            'retaining-wall': '#d2691e',
+            'block-wall': '#868e96',
+            'railing': '#f59f00',
+            'rock': '#aaa9a5',
+            'group': '#cc5de8'
+        };
+
+        this.structures.forEach(struct => {
+            const pos = struct.position;
+            let dist, profilePos;
+
+            if (direction === 'xz') {
+                // Slice is at a fixed X; structures show by their Z position
+                dist = Math.abs(pos.x - sliceWorldPos);
+                // Map structure Z to canvas X: Z ranges from -hd to +hd → 0 to canvasW
+                profilePos = (pos.z + hd) / this.terrainDepth;
+            } else {
+                // Slice is at a fixed Z; structures show by their X position
+                dist = Math.abs(pos.z - sliceWorldPos);
+                // Map structure X to canvas X: X ranges from -hw to +hw → 0 to canvasW
+                profilePos = (pos.x + hw) / this.terrainWidth;
+            }
+
+            if (dist > proximity) return; // too far from slice
+
+            const alpha = 1.0 - (dist / proximity) * 0.6; // closer = more opaque
+            const px = profilePos * canvasW;
+            const py = canvasH - (pos.y / 20) * (canvasH - 20) - 8;
+
+            // Get bounding box height for the structure
+            const bbox = new THREE.Box3().setFromObject(struct);
+            const structH = bbox.max.y - bbox.min.y;
+            const topPy = canvasH - ((pos.y + structH) / 20) * (canvasH - 20) - 8;
+
+            const color = typeColors[struct.userData.type] || '#ffffff';
+            ctx.save();
+            ctx.globalAlpha = alpha;
+
+            // Draw a vertical bar representing the structure's cross-section
+            ctx.fillStyle = color;
+            ctx.fillRect(px - 3, topPy, 6, py - topPy);
+
+            // Outline
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(px - 3, topPy, 6, py - topPy);
+
+            // Label (small)
+            ctx.fillStyle = color;
+            ctx.font = '8px sans-serif';
+            const label = struct.userData.label || struct.userData.type;
+            ctx.fillText(label, px + 5, topPy + 6);
+
+            ctx.restore();
+        });
+    }
+
+    popoutProfile() {
+        const popWin = window.open('', 'ProfileEditor', 'width=700,height=450,resizable=yes');
+        if (!popWin) { alert('Popup blocked! Please allow popups for this site.'); return; }
+
+        popWin.document.write(`<!DOCTYPE html><html><head><title>Cross-Section Editor</title>
+        <style>
+            body { margin:0; background:#0d1b2a; font-family:sans-serif; color:#eee; display:flex; flex-direction:column; height:100vh; }
+            #controls { padding:8px 12px; background:#16213e; display:flex; gap:12px; align-items:center; font-size:12px; flex-wrap:wrap; }
+            #controls label { color:#aaa; }
+            #controls input[type=range] { width:200px; }
+            #controls button { background:#0f3460; color:#eee; border:1px solid #1a4a7a; border-radius:3px; padding:4px 10px; cursor:pointer; }
+            #controls button.active { background:#4fc3f7; color:#111; }
+            canvas { flex:1; width:100%; cursor:crosshair; }
+            .legend { padding:4px 12px; font-size:10px; color:#888; display:flex; gap:12px; flex-wrap:wrap; }
+            .legend span { display:inline-flex; align-items:center; gap:3px; }
+            .legend .swatch { width:10px; height:10px; border-radius:2px; }
+        </style></head><body>
+        <div id="controls">
+            <label>Slice: <span id="pop-slice-val">50</span>%</label>
+            <input type="range" id="pop-slice" min="0" max="100" value="${this.slicePosition}" step="1">
+            <button id="pop-xz" class="${this.sliceDirection==='xz'?'active':''}">House→Lake</button>
+            <button id="pop-lr" class="${this.sliceDirection==='lr'?'active':''}">Left→Right</button>
+            <span style="color:#888;font-size:10px;">Click &amp; drag to edit terrain</span>
+        </div>
+        <canvas id="pop-canvas"></canvas>
+        <div class="legend">
+            <span><span class="swatch" style="background:#ff6b6b"></span>House</span>
+            <span><span class="swatch" style="background:#ffa94d"></span>Deck</span>
+            <span><span class="swatch" style="background:#ffe066"></span>Stairs</span>
+            <span><span class="swatch" style="background:#74c0fc"></span>Dock</span>
+            <span><span class="swatch" style="background:#adb5bd"></span>Patio</span>
+            <span><span class="swatch" style="background:#69db7c"></span>Tree</span>
+            <span><span class="swatch" style="background:#d2691e"></span>Wood Wall</span>
+            <span><span class="swatch" style="background:#868e96"></span>Block Wall</span>
+        </div>
+        </body></html>`);
+        popWin.document.close();
+
+        const popCanvas = popWin.document.getElementById('pop-canvas');
+        const resize = () => {
+            popCanvas.width = popWin.innerWidth;
+            popCanvas.height = popWin.innerHeight - 80;
+        };
+        resize();
+        popWin.addEventListener('resize', resize);
+
+        // Draw function using the same logic
+        const drawPop = () => {
+            if (popWin.closed) return;
+            resize();
+            const ctx = popCanvas.getContext('2d');
+            const w = popCanvas.width, h = popCanvas.height;
+            ctx.clearRect(0,0,w,h);
+            ctx.fillStyle='#0d1b2a'; ctx.fillRect(0,0,w,h);
+            const s = this.segments;
+            const sliceNorm = this.slicePosition / 100;
+            const hw = this.terrainWidth/2, hd = this.terrainDepth/2;
+
+            if (this.sliceDirection === 'xz') {
+                const ci = Math.floor(s * sliceNorm);
+                const sliceX = sliceNorm * this.terrainWidth - hw;
+                ctx.beginPath(); ctx.strokeStyle='#4fc3f7'; ctx.lineWidth=2;
+                for(let j=0;j<=s;j++){const idx=j*(s+1)+ci;const px=(j/s)*w;const py=h-(this.heightData[idx]/20)*(h-20)-8;j===0?ctx.moveTo(px,py):ctx.lineTo(px,py);}
+                ctx.stroke();
+                ctx.beginPath(); ctx.strokeStyle='rgba(255,255,100,0.35)'; ctx.lineWidth=1; ctx.setLineDash([4,4]);
+                for(let j=0;j<=s;j++){const idx=j*(s+1)+ci;const px=(j/s)*w;const py=h-(this.originalHeightData[idx]/20)*(h-20)-8;j===0?ctx.moveTo(px,py):ctx.lineTo(px,py);}
+                ctx.stroke(); ctx.setLineDash([]);
+                ctx.fillStyle='#666'; ctx.font='11px sans-serif';
+                ctx.fillText('House',4,14); ctx.fillText('Slope',w*0.55,14); ctx.fillText('Beach',w*0.82,14);
+                this.drawStructuresOnProfile(ctx, w, h, 'xz', sliceX);
+            } else {
+                const cj = Math.floor(s * sliceNorm);
+                const sliceZ = sliceNorm * this.terrainDepth - hd;
+                ctx.beginPath(); ctx.strokeStyle='#4fc3f7'; ctx.lineWidth=2;
+                for(let i=0;i<=s;i++){const idx=cj*(s+1)+i;const px=(i/s)*w;const py=h-(this.heightData[idx]/20)*(h-20)-8;i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);}
+                ctx.stroke();
+                ctx.beginPath(); ctx.strokeStyle='rgba(255,255,100,0.35)'; ctx.lineWidth=1; ctx.setLineDash([4,4]);
+                for(let i=0;i<=s;i++){const idx=cj*(s+1)+i;const px=(i/s)*w;const py=h-(this.originalHeightData[idx]/20)*(h-20)-8;i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);}
+                ctx.stroke(); ctx.setLineDash([]);
+                ctx.fillStyle='#666'; ctx.font='11px sans-serif';
+                ctx.fillText('Left',4,14); ctx.fillText('Right',w-40,14);
+                this.drawStructuresOnProfile(ctx, w, h, 'lr', sliceZ);
+            }
+            // Scale marks
+            ctx.strokeStyle='rgba(255,255,255,0.12)'; ctx.lineWidth=0.5;
+            for(let ft=0;ft<=20;ft+=5){const y=h-(ft/20)*(h-20)-8;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();ctx.fillStyle='#555';ctx.font='10px sans-serif';ctx.fillText(`${ft} ft`,2,y-3);}
+        };
+
+        // Interaction in popout
+        let popDragging = false;
+        popCanvas.addEventListener('mousedown', (e) => { popDragging = true; this.editProfileAtCanvas(popCanvas, e); drawPop(); });
+        popCanvas.addEventListener('mousemove', (e) => { if(popDragging){this.editProfileAtCanvas(popCanvas, e); drawPop();} });
+        popCanvas.addEventListener('mouseup', () => { popDragging=false; this.saveHistory(); this.updateStats(); this.updateProfile(); });
+
+        // Controls in popout
+        popWin.document.getElementById('pop-slice').addEventListener('input', (e) => {
+            this.slicePosition = +e.target.value;
+            popWin.document.getElementById('pop-slice-val').textContent = this.slicePosition;
+            document.getElementById('slice-pos').value = this.slicePosition;
+            document.getElementById('slice-pos-val').textContent = this.slicePosition;
+            this.updateSliceLine();
+            drawPop();
+            this.updateProfile();
+        });
+        popWin.document.getElementById('pop-xz').addEventListener('click', () => {
+            this.sliceDirection = 'xz';
+            popWin.document.getElementById('pop-xz').classList.add('active');
+            popWin.document.getElementById('pop-lr').classList.remove('active');
+            document.getElementById('btn-slice-xz').classList.add('active');
+            document.getElementById('btn-slice-lr').classList.remove('active');
+            this.updateSliceLine(); drawPop(); this.updateProfile();
+        });
+        popWin.document.getElementById('pop-lr').addEventListener('click', () => {
+            this.sliceDirection = 'lr';
+            popWin.document.getElementById('pop-lr').classList.add('active');
+            popWin.document.getElementById('pop-xz').classList.remove('active');
+            document.getElementById('btn-slice-lr').classList.add('active');
+            document.getElementById('btn-slice-xz').classList.remove('active');
+            this.updateSliceLine(); drawPop(); this.updateProfile();
+        });
+
+        // Keep popout in sync - redraw periodically
+        const syncInterval = setInterval(() => {
+            if (popWin.closed) { clearInterval(syncInterval); return; }
+            drawPop();
+        }, 500);
+
+        drawPop();
+    }
+
+    editProfileAtCanvas(canvas, e) {
+        const rect = canvas.getBoundingClientRect();
+        const mx = (e.clientX - rect.left) / rect.width;
+        const my = 1 - (e.clientY - rect.top) / rect.height;
+        const targetHeight = my * 20;
+        const s = this.segments;
+        const sliceNorm = this.slicePosition / 100;
+        const brushWidth = 3;
+        const pos = this.terrainGeom.attributes.position.array;
+
+        if (this.sliceDirection === 'xz') {
+            const ci = Math.floor(s * sliceNorm);
+            const targetJ = Math.floor(mx * s);
+            for (let dj=-brushWidth;dj<=brushWidth;dj++){const j=targetJ+dj;if(j<0||j>s)continue;const f=1-Math.abs(dj)/(brushWidth+1);for(let di=-1;di<=1;di++){const i=ci+di;if(i<0||i>s)continue;const idx=j*(s+1)+i;this.heightData[idx]+=(targetHeight-this.heightData[idx])*f*0.3;pos[idx*3+1]=this.heightData[idx];}}
+        } else {
+            const cj = Math.floor(s * sliceNorm);
+            const targetI = Math.floor(mx * s);
+            for(let di=-brushWidth;di<=brushWidth;di++){const i=targetI+di;if(i<0||i>s)continue;const f=1-Math.abs(di)/(brushWidth+1);for(let dj=-1;dj<=1;dj++){const j=cj+dj;if(j<0||j>s)continue;const idx=j*(s+1)+i;this.heightData[idx]+=(targetHeight-this.heightData[idx])*f*0.3;pos[idx*3+1]=this.heightData[idx];}}
+        }
+        this.terrainGeom.attributes.position.needsUpdate = true;
+        this.terrainGeom.computeVertexNormals();
+        this.colorTerrain();
+        this.terrainGeom.attributes.color.needsUpdate = true;
+        this.updateSliceLine();
     }
 
     setupProfileInteraction() {
@@ -1285,6 +1522,21 @@ class App {
             }
         });
         canvas.addEventListener('mouseleave', () => { isDragging = false; });
+
+        // Popout button
+        document.getElementById('btn-popout-profile').addEventListener('click', () => this.popoutProfile());
+
+        // Resize observer: when the right panel is resized, resize the canvas to match
+        const panel = document.getElementById('info-panel');
+        const resizeObs = new ResizeObserver(() => {
+            const pw = panel.clientWidth - 30; // account for padding
+            if (pw > 100) {
+                canvas.width = pw;
+                canvas.height = Math.max(120, Math.floor(pw * 0.55));
+                this.updateProfile();
+            }
+        });
+        resizeObs.observe(panel);
 
         // Slice controls
         document.getElementById('slice-pos').addEventListener('input', (e) => {

@@ -34,7 +34,10 @@ body {
 
 .right-panel {
     width: 280px;
-    min-width: 280px;
+    min-width: 200px;
+    max-width: 500px;
+    resize: horizontal;
+    overflow: auto;
 }
 
 .panel h2 {
