@@ -61,6 +61,7 @@ class App {
         this.sliceDirection = 'xz'; // 'xz' = house-to-lake, 'lr' = left-to-right
         this.slicePosition = 50; // percentage along the perpendicular axis
         this.profileEditing = false;
+        this.sliceLine = null; // 3D visualization of slice position
 
         this.init();
     }
@@ -72,6 +73,7 @@ class App {
         this.createWater();
         this.createBrushMarker();
         this.setupGrid();
+        this.createSliceLine();
         this.createSiteStructures();
         this.setupEvents();
         this.setupUI();
@@ -256,6 +258,75 @@ class App {
         this.sideGrid.position.set(-this.terrainWidth/2, 12.5, 0);
         this.sideGrid.visible = this.gridVisible;
         this.scene.add(this.sideGrid);
+    }
+
+    createSliceLine() {
+        // A bright colored line in 3D showing where the cross-section slice is
+        const material = new THREE.LineBasicMaterial({ color: 0xff4444, linewidth: 2, transparent: true, opacity: 0.8 });
+        const points = [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 25, 0)];
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        this.sliceLine = new THREE.Line(geometry, material);
+        this.sliceLine.visible = true;
+        this.scene.add(this.sliceLine);
+
+        // Also add a semi-transparent slice plane to make it more visible
+        const planeGeo = new THREE.PlaneGeometry(1, 25);
+        const planeMat = new THREE.MeshBasicMaterial({
+            color: 0xff4444, transparent: true, opacity: 0.08, side: THREE.DoubleSide
+        });
+        this.slicePlane = new THREE.Mesh(planeGeo, planeMat);
+        this.scene.add(this.slicePlane);
+
+        this.updateSliceLine();
+    }
+
+    updateSliceLine() {
+        if (!this.sliceLine) return;
+        const hw = this.terrainWidth / 2;
+        const hd = this.terrainDepth / 2;
+        const sliceNorm = this.slicePosition / 100;
+
+        const positions = [];
+        const s = this.segments;
+
+        if (this.sliceDirection === 'xz') {
+            // Slice is at a fixed X position, runs along Z (house-to-lake)
+            const xPos = sliceNorm * this.terrainWidth - hw;
+            // Build a line that follows the terrain surface at this X
+            const ci = Math.floor(s * sliceNorm);
+            for (let j = 0; j <= s; j += 2) {
+                const idx = j * (s + 1) + ci;
+                const zPos = (j / s) * this.terrainDepth - hd;
+                const h = this.heightData[idx] + 0.3;
+                positions.push(new THREE.Vector3(xPos, h, zPos));
+            }
+            // Update slice plane
+            this.slicePlane.geometry.dispose();
+            this.slicePlane.geometry = new THREE.PlaneGeometry(0.1, 25);
+            this.slicePlane.position.set(xPos, 12.5, 0);
+            this.slicePlane.rotation.set(0, 0, 0);
+            this.slicePlane.scale.set(1, 1, this.terrainDepth);
+        } else {
+            // Slice is at a fixed Z position, runs along X (left-to-right)
+            const zPos = sliceNorm * this.terrainDepth - hd;
+            const cj = Math.floor(s * sliceNorm);
+            for (let i = 0; i <= s; i += 2) {
+                const idx = cj * (s + 1) + i;
+                const xPos = (i / s) * this.terrainWidth - hw;
+                const h = this.heightData[idx] + 0.3;
+                positions.push(new THREE.Vector3(xPos, h, zPos));
+            }
+            // Update slice plane
+            this.slicePlane.geometry.dispose();
+            this.slicePlane.geometry = new THREE.PlaneGeometry(0.1, 25);
+            this.slicePlane.position.set(0, 12.5, zPos);
+            this.slicePlane.rotation.set(0, Math.PI / 2, 0);
+            this.slicePlane.scale.set(1, 1, this.terrainWidth);
+        }
+
+        // Update the line geometry
+        this.sliceLine.geometry.dispose();
+        this.sliceLine.geometry = new THREE.BufferGeometry().setFromPoints(positions);
     }
 
     getTerrainHeightAt(x, z) {
@@ -525,7 +596,7 @@ class App {
 
     placeRetainingWall(x, z) {
         const g = new THREE.Group();
-        g.userData = { type: 'retaining-wall', label: 'Retaining Wall' };
+        g.userData = { type: 'retaining-wall', label: 'Wood Retaining Wall' };
         const len = 12, wH = 3.5, pc = 0x5C4033, bc = 0x8B6914;
         const pCount = Math.floor(len/1.5)+1;
         for (let i = 0; i < pCount; i++) {
@@ -541,6 +612,58 @@ class App {
             g.add(b);
         }
         g.position.set(x, this.getTerrainHeightAt(x,z), z);
+        g.rotation.y = Math.PI; // Default rotated 180 degrees (boards face uphill)
+        this.registerStructure(g);
+    }
+
+    placeBlockWall(x, z) {
+        // Low block/stone retaining wall (like the ones in the original photos)
+        const g = new THREE.Group();
+        g.userData = { type: 'block-wall', label: 'Low Block Wall' };
+        const len = 10, wallH = 2.0;
+        const blockW = 1.2, blockH = 0.4, blockD = 0.8;
+        const blockColor = 0x6a6a60;
+        const rows = Math.floor(wallH / blockH);
+        const blocksPerRow = Math.floor(len / blockW);
+
+        for (let row = 0; row < rows; row++) {
+            // Offset every other row for masonry pattern
+            const offset = (row % 2 === 0) ? 0 : blockW * 0.5;
+            for (let col = 0; col < blocksPerRow; col++) {
+                const bx = col * blockW - len / 2 + blockW / 2 + offset;
+                if (bx > len / 2) continue;
+                // Slight color variation per block
+                const shade = 0.35 + Math.random() * 0.15;
+                const blockMat = new THREE.MeshStandardMaterial({
+                    color: new THREE.Color(shade, shade * 0.95, shade * 0.85),
+                    roughness: 0.92,
+                    flatShading: true
+                });
+                const block = new THREE.Mesh(
+                    new THREE.BoxGeometry(blockW - 0.05, blockH - 0.02, blockD),
+                    blockMat
+                );
+                block.position.set(bx, row * blockH + blockH / 2, 0);
+                block.castShadow = true;
+                g.add(block);
+            }
+        }
+        // Cap stones on top (slightly wider and different color)
+        for (let col = 0; col < blocksPerRow; col++) {
+            const bx = col * blockW - len / 2 + blockW / 2;
+            const capMat = new THREE.MeshStandardMaterial({
+                color: 0x7a7a70, roughness: 0.85
+            });
+            const cap = new THREE.Mesh(
+                new THREE.BoxGeometry(blockW - 0.02, 0.15, blockD + 0.1),
+                capMat
+            );
+            cap.position.set(bx, rows * blockH + 0.08, 0);
+            cap.castShadow = true;
+            g.add(cap);
+        }
+
+        g.position.set(x, this.getTerrainHeightAt(x, z), z);
         this.registerStructure(g);
     }
 
@@ -864,6 +987,7 @@ class App {
                         case 'stairs': this.placeStairs(p.x, p.z); break;
                         case 'railing': this.placeRailing(p.x, p.z); break;
                         case 'retaining-wall': this.placeRetainingWall(p.x, p.z); break;
+                        case 'block-wall': this.placeBlockWall(p.x, p.z); break;
                         case 'rock': this.placeRock(p.x, p.z); break;
                         case 'tree': this.placeTree(p.x, p.z); break;
                     }
@@ -972,7 +1096,7 @@ class App {
             document.getElementById('target-height-val').textContent = this.targetHeight;
         });
         // Place buttons
-        ['stairs','railing','retaining-wall','rock','tree'].forEach(t => {
+        ['stairs','railing','retaining-wall','block-wall','rock','tree'].forEach(t => {
             document.getElementById(`btn-place-${t}`).addEventListener('click', () => {
                 this.placeType = t;
                 this.setMode('place');
@@ -1150,18 +1274,21 @@ class App {
             this.slicePosition = +e.target.value;
             document.getElementById('slice-pos-val').textContent = this.slicePosition;
             this.updateProfile();
+            this.updateSliceLine();
         });
         document.getElementById('btn-slice-xz').addEventListener('click', () => {
             this.sliceDirection = 'xz';
             document.getElementById('btn-slice-xz').classList.add('active');
             document.getElementById('btn-slice-lr').classList.remove('active');
             this.updateProfile();
+            this.updateSliceLine();
         });
         document.getElementById('btn-slice-lr').addEventListener('click', () => {
             this.sliceDirection = 'lr';
             document.getElementById('btn-slice-lr').classList.add('active');
             document.getElementById('btn-slice-xz').classList.remove('active');
             this.updateProfile();
+            this.updateSliceLine();
         });
     }
 
@@ -1217,6 +1344,7 @@ class App {
         this.colorTerrain();
         this.terrainGeom.attributes.color.needsUpdate = true;
         this.updateProfile();
+        this.updateSliceLine();
     }
 
     exportData() {
