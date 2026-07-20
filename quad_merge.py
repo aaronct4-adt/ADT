@@ -319,11 +319,17 @@ def run_merge(video_paths, offsets, mapping, output_path, codec, fps_override,
 
         preview_frame = build_output_frame(frames, mapping, (out_w, out_h))
         preview_path = output_path.rsplit(".", 1)[0] + "_preview.jpg"
+        preview_dir = os.path.dirname(preview_path)
+        if preview_dir and not os.path.isdir(preview_dir):
+            os.makedirs(preview_dir, exist_ok=True)
         cv2.imwrite(preview_path, preview_frame)
         print(f"Preview saved to: {preview_path}")
         return 1
 
     # Setup writer
+    out_dir = os.path.dirname(output_path)
+    if out_dir and not os.path.isdir(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
     fourcc = cv2.VideoWriter_fourcc(*codec)
     writer = cv2.VideoWriter(output_path, fourcc, out_fps, (out_w, out_h))
     if not writer.isOpened():

@@ -292,7 +292,8 @@ class QuadMergerApp:
         path = filedialog.asksaveasfilename(
             title="Save Merged Video As",
             defaultextension=".avi",
-            filetypes=[("AVI files", "*.avi"), ("All files", "*.*")])
+            filetypes=[("AVI files", "*.avi"), ("All files", "*.*")],
+            confirmoverwrite=False)
         if path:
             self.output_path.set(path)
 
@@ -334,7 +335,8 @@ class QuadMergerApp:
         path = filedialog.asksaveasfilename(
             title="Save Preset As",
             defaultextension=".json",
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            confirmoverwrite=False)
         if not path:
             return
         preset = {
@@ -545,6 +547,9 @@ class QuadMergerApp:
             # Save to disk next to output
             out = self.output_path.get()
             preview_path = (out.rsplit(".", 1)[0] if "." in out else out) + "_preview.jpg"
+            preview_dir = os.path.dirname(preview_path)
+            if preview_dir and not os.path.isdir(preview_dir):
+                os.makedirs(preview_dir, exist_ok=True)
             cv2.imwrite(preview_path, composite)
 
             # Show in popup window
@@ -649,6 +654,18 @@ class QuadMergerApp:
                     total_frames_est = min(v["total"] for v in video_info)
 
             fourcc = cv2.VideoWriter_fourcc(*codec)
+            # Ensure output directory exists
+            out_dir = os.path.dirname(output_path)
+            if out_dir and not os.path.isdir(out_dir):
+                try:
+                    os.makedirs(out_dir, exist_ok=True)
+                except OSError as e:
+                    self._set_status(f"Error: Cannot create output directory: {e}", "red")
+                    for c in caps: c.release()
+                    self._enable_buttons()
+                    return
+            # Normalize path for Windows compatibility
+            output_path = os.path.normpath(output_path)
             writer = cv2.VideoWriter(output_path, fourcc, out_fps, (out_w, out_h))
             if not writer.isOpened():
                 self._set_status(f"Error: Cannot create output with codec '{codec}'.", "red")
