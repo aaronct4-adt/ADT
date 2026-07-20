@@ -25,6 +25,7 @@ import numpy as np
 QUADRANT_NAMES = ["TL", "TR", "BL", "BR"]
 SOURCE_QUADRANTS = ["TL", "TR", "BL", "BR", "FULL"]
 VIDEO_SOURCES = ["1", "2", "3", "4"]
+SYNC_MODES = ["Lock Time", "Lock Frame Rate"]
 QUADRANT_LABELS = {"TL": "Top-Left", "TR": "Top-Right",
                    "BL": "Bottom-Left", "BR": "Bottom-Right"}
 
@@ -104,6 +105,7 @@ class QuadMergerApp:
         self.codec_var = tk.StringVar(value="MJPG")
         self.start_time_var = tk.StringVar(value="")
         self.end_time_var = tk.StringVar(value="")
+        self.sync_mode_var = tk.StringVar(value="Lock Time")
 
         # Mapping
         self.mapping_vars = {}
@@ -222,9 +224,20 @@ class QuadMergerApp:
                      values=["MJPG", "XVID", "DIVX", "mp4v"],
                      width=8, state="readonly").grid(row=1, column=1, sticky="w", pady=(6, 0))
 
+        # Sync mode
+        sync_frame = ttk.Frame(frame)
+        sync_frame.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(sync_frame, text="Sync Mode:").grid(row=0, column=0, padx=(0, 4))
+        ttk.Combobox(sync_frame, textvariable=self.sync_mode_var,
+                     values=SYNC_MODES, width=16, state="readonly").grid(row=0, column=1, padx=(0, 10))
+        ttk.Label(sync_frame,
+                  text="Lock Time = real-time sync (skips frames). "
+                       "Lock Frame Rate = native playback (slow-mo preserved).",
+                  foreground="gray", font=("", 8)).grid(row=0, column=2)
+
         # Frame range
         range_frame = ttk.Frame(frame)
-        range_frame.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        range_frame.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Label(range_frame, text="Start Time:").grid(row=0, column=0, padx=(0, 4))
         ttk.Entry(range_frame, textvariable=self.start_time_var, width=10).grid(row=0, column=1, padx=(0, 16))
         ttk.Label(range_frame, text="End Time:").grid(row=0, column=2, padx=(0, 4))
@@ -234,7 +247,7 @@ class QuadMergerApp:
 
         # Preset buttons
         preset_frame = ttk.Frame(frame)
-        preset_frame.grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        preset_frame.grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
         ttk.Label(preset_frame, text="Preset:").grid(row=0, column=0, padx=(0, 6))
         ttk.Button(preset_frame, text="Save Preset", command=self._save_preset).grid(row=0, column=1, padx=(0, 6))
         ttk.Button(preset_frame, text="Load Preset", command=self._load_preset).grid(row=0, column=2)
@@ -334,6 +347,7 @@ class QuadMergerApp:
             "codec": self.codec_var.get(),
             "start_time": self.start_time_var.get(),
             "end_time": self.end_time_var.get(),
+            "sync_mode": self.sync_mode_var.get(),
         }
         with open(path, "w") as f:
             json.dump(preset, f, indent=2)
@@ -370,6 +384,7 @@ class QuadMergerApp:
         self.codec_var.set(preset.get("codec", "MJPG"))
         self.start_time_var.set(preset.get("start_time", "") or "")
         self.end_time_var.set(preset.get("end_time", "") or "")
+        self.sync_mode_var.set(preset.get("sync_mode", "Lock Time") or "Lock Time")
 
         messagebox.showinfo("Preset Loaded", f"Preset loaded from:\n{path}")
 
@@ -442,7 +457,10 @@ class QuadMergerApp:
         end_str = self.end_time_var.get().strip()
         end_t = time_to_seconds(end_str) if end_str else None
 
-        return video_paths, offsets, mapping, start_t, end_t
+        # Convert GUI label to internal mode string
+        sync_mode = "time" if self.sync_mode_var.get() == "Lock Time" else "framerate"
+
+        return video_paths, offsets, mapping, start_t, end_t, sync_mode
 
     def _disable_buttons(self):
         self.merge_btn.config(state="disabled")
@@ -471,7 +489,7 @@ class QuadMergerApp:
 
     def _do_preview(self):
         try:
-            video_paths, offsets, mapping, start_t, _ = self._build_run_params()
+            video_paths, offsets, mapping, start_t, _, _sync = self._build_run_params()
 
             caps = []
             frames = []
@@ -556,7 +574,7 @@ class QuadMergerApp:
 
     def _do_merge(self):
         try:
-            video_paths, offsets, mapping, start_t, end_t = self._build_run_params()
+            video_paths, offsets, mapping, start_t, end_t, sync_mode = self._build_run_params()
             output_path = self.output_path.get()
             codec = self.codec_var.get()
 
@@ -611,20 +629,70 @@ class QuadMergerApp:
                 return
 
             frame_count = 0
+            last_frames = [None] * len(caps)
+            start_positions = [int(cap.get(cv2.CAP_PROP_POS_FRAMES)) for cap in caps]
+
             while True:
                 if max_frames is not None and frame_count >= max_frames:
                     break
 
                 frames = []
                 all_ok = True
-                for cap in caps:
-                    ret, frame = cap.read()
-                    if not ret:
-                        all_ok = False
-                        break
-                    if frame.shape[1] != out_w or frame.shape[0] != out_h:
-                        frame = cv2.resize(frame, (out_w, out_h))
-                    frames.append(frame)
+
+                if sync_mode == "time":
+                    output_time = frame_count / out_fps
+                    for i, cap in enumerate(caps):
+                        src_fps = video_info[i]["fps"]
+                        target_frame = start_positions[i] + int(output_time * src_fps)
+                        current_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+
+                        if target_frame > current_frame:
+                            if target_frame - current_frame > 10:
+                                cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+                            else:
+                                for _ in range(target_frame - current_frame - 1):
+                                    if not cap.grab():
+                                        break
+                            ret, frame = cap.read()
+                            if ret:
+                                last_frames[i] = frame
+                            elif last_frames[i] is not None:
+                                frame = last_frames[i]
+                            else:
+                                all_ok = False
+                                break
+                        elif target_frame == current_frame:
+                            ret, frame = cap.read()
+                            if ret:
+                                last_frames[i] = frame
+                            elif last_frames[i] is not None:
+                                frame = last_frames[i]
+                            else:
+                                all_ok = False
+                                break
+                        else:
+                            if last_frames[i] is not None:
+                                frame = last_frames[i]
+                            else:
+                                ret, frame = cap.read()
+                                if not ret:
+                                    all_ok = False
+                                    break
+                                last_frames[i] = frame
+
+                        if frame.shape[1] != out_w or frame.shape[0] != out_h:
+                            frame = cv2.resize(frame, (out_w, out_h))
+                        frames.append(frame)
+                else:
+                    for i, cap in enumerate(caps):
+                        ret, frame = cap.read()
+                        if not ret:
+                            all_ok = False
+                            break
+                        last_frames[i] = frame
+                        if frame.shape[1] != out_w or frame.shape[0] != out_h:
+                            frame = cv2.resize(frame, (out_w, out_h))
+                        frames.append(frame)
 
                 if not all_ok:
                     break
@@ -657,7 +725,7 @@ class QuadMergerApp:
 
 def main():
     root = tk.Tk()
-    root.geometry("860x780")
+    root.geometry("860x820")
     app = QuadMergerApp(root)
     root.mainloop()
 

@@ -11,6 +11,7 @@ Features:
 - FULL source option (scale entire frame into one quadrant)
 - Time offset per video (start each at a different point)
 - Frame range export (only export a specific range)
+- Sync mode: lock time (real-time sync) or lock framerate (native playback)
 - Batch mode (process multiple videos with same mapping)
 - Save/load preset configurations (JSON)
 - Output preview (show a single frame preview before full export)
@@ -50,6 +51,7 @@ import numpy as np
 QUADRANT_NAMES = ["TL", "TR", "BL", "BR"]
 SOURCE_QUADRANTS = ["TL", "TR", "BL", "BR", "FULL"]
 MAX_VIDEOS = 4
+SYNC_MODES = ["time", "framerate"]
 
 
 def time_to_seconds(time_str):
@@ -189,6 +191,7 @@ def save_preset(args, path):
         "offset4": args.offset4,
         "start_time": args.start_time,
         "end_time": args.end_time,
+        "sync_mode": args.sync_mode,
     }
     with open(path, "w") as f:
         json.dump(preset, f, indent=2)
@@ -208,7 +211,7 @@ def load_preset(path):
 
 
 def run_merge(video_paths, offsets, mapping, output_path, codec, fps_override,
-              start_time, end_time, preview_only=False, verbose=True):
+              start_time, end_time, preview_only=False, sync_mode="time", verbose=True):
     """
     Core merge function. Used by both single and batch modes.
 
@@ -222,6 +225,8 @@ def run_merge(video_paths, offsets, mapping, output_path, codec, fps_override,
         start_time: global start time in seconds (applied after per-video offsets)
         end_time: global end time in seconds or None
         preview_only: if True, export only the first merged frame as a JPEG
+        sync_mode: "time" (lock real-time, skip/duplicate frames) or
+                   "framerate" (one source frame per output frame, no compensation)
         verbose: print progress
     Returns:
         frame_count written, or None on error
@@ -251,6 +256,7 @@ def run_merge(video_paths, offsets, mapping, output_path, codec, fps_override,
             off = offsets[i] if i < len(offsets) else 0.0
             print(f"  Video {i+1}: {info['w']}x{info['h']} @ {info['fps']:.2f} FPS, "
                   f"{info['total']} frames, offset={seconds_to_time(off)}")
+        print(f"  Sync mode: {sync_mode}")
 
     # Seek each video to its offset
     for i, cap in enumerate(caps):
@@ -322,25 +328,90 @@ def run_merge(video_paths, offsets, mapping, output_path, codec, fps_override,
         return None
 
     frame_count = 0
+    # Track the last successfully read frame for each video (for time sync)
+    last_frames = [None] * len(caps)
+    # Track start positions (frame index after all seeks) for time sync
+    start_positions = [int(cap.get(cv2.CAP_PROP_POS_FRAMES)) for cap in caps]
+
     while True:
         if max_frames is not None and frame_count >= max_frames:
             break
 
         frames = []
         all_ok = True
-        for cap in caps:
-            ret, frame = cap.read()
-            if not ret:
-                all_ok = False
-                break
-            frames.append(frame)
+
+        if sync_mode == "time":
+            # Time-lock mode: calculate which frame each video should be at
+            # based on elapsed output time
+            output_time = frame_count / out_fps  # seconds elapsed in output
+
+            for i, cap in enumerate(caps):
+                src_fps = video_info[i]["fps"]
+                # The frame number this video should be at for this output time
+                target_frame = start_positions[i] + int(output_time * src_fps)
+                current_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+
+                if target_frame > current_frame:
+                    # Need to skip ahead — seek or read forward
+                    if target_frame - current_frame > 10:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+                    else:
+                        # Read and discard frames to advance
+                        for _ in range(target_frame - current_frame - 1):
+                            ret = cap.grab()
+                            if not ret:
+                                break
+
+                    ret, frame = cap.read()
+                    if ret:
+                        last_frames[i] = frame
+                    elif last_frames[i] is not None:
+                        frame = last_frames[i]  # hold last frame
+                        ret = True
+                    else:
+                        all_ok = False
+                        break
+                elif target_frame == current_frame:
+                    # Read next frame normally
+                    ret, frame = cap.read()
+                    if ret:
+                        last_frames[i] = frame
+                    elif last_frames[i] is not None:
+                        frame = last_frames[i]
+                        ret = True
+                    else:
+                        all_ok = False
+                        break
+                else:
+                    # Target is behind current (shouldn't happen in forward play)
+                    # Use last frame (duplicate)
+                    if last_frames[i] is not None:
+                        frame = last_frames[i]
+                    else:
+                        ret, frame = cap.read()
+                        if not ret:
+                            all_ok = False
+                            break
+                        last_frames[i] = frame
+
+                if frame.shape[1] != out_w or frame.shape[0] != out_h:
+                    frame = cv2.resize(frame, (out_w, out_h))
+                frames.append(frame)
+
+        else:
+            # Framerate-lock mode: read one frame per video per output frame
+            for i, cap in enumerate(caps):
+                ret, frame = cap.read()
+                if not ret:
+                    all_ok = False
+                    break
+                last_frames[i] = frame
+                if frame.shape[1] != out_w or frame.shape[0] != out_h:
+                    frame = cv2.resize(frame, (out_w, out_h))
+                frames.append(frame)
 
         if not all_ok:
             break
-
-        for i in range(len(frames)):
-            if frames[i].shape[1] != out_w or frames[i].shape[0] != out_h:
-                frames[i] = cv2.resize(frames[i], (out_w, out_h))
 
         output_frame = build_output_frame(frames, mapping, (out_w, out_h))
         writer.write(output_frame)
@@ -438,6 +509,7 @@ def run_batch(batch_config_path):
         fps_override = job.get("fps")
         start_time = time_to_seconds(job.get("start_time")) if job.get("start_time") else 0.0
         end_time = time_to_seconds(job.get("end_time")) if job.get("end_time") else None
+        sync_mode = job.get("sync_mode", "time")
 
         result = run_merge(
             video_paths=video_paths,
@@ -448,6 +520,7 @@ def run_batch(batch_config_path):
             fps_override=fps_override,
             start_time=start_time,
             end_time=end_time,
+            sync_mode=sync_mode,
             verbose=True,
         )
 
@@ -510,6 +583,15 @@ EXAMPLES:
 
     # Batch mode
     python quad_merge.py --batch batch_config.json
+
+    # Sync mode: keep all videos time-aligned (default)
+    python quad_merge.py --video1 a.avi --video2 b.avi --output out.avi \\
+        --map TL=1:TL TR=2:TR BL=1:BL BR=2:BR --sync-mode time
+
+    # Sync mode: play each video at native framerate (no compensation)
+    # Useful when you WANT slow-mo from a high-FPS source
+    python quad_merge.py --video1 a.avi --video2 slowmo.avi --output out.avi \\
+        --map TL=1:TL TR=2:TR BL=1:BL BR=2:BR --sync-mode framerate
         """,
     )
 
@@ -543,6 +625,13 @@ EXAMPLES:
                         help="Export start time, e.g. 00:01:00")
     parser.add_argument("--end-time", default=None, metavar="TIME",
                         help="Export end time, e.g. 00:05:00")
+
+    # Sync mode
+    parser.add_argument("--sync-mode", default="time", choices=["time", "framerate"],
+                        help="Sync mode: 'time' keeps videos in real-time sync "
+                             "(skips/duplicates frames to match); 'framerate' reads one "
+                             "frame per video per output frame with no compensation "
+                             "(default: time)")
 
     # Modes
     parser.add_argument("--preview", action="store_true",
@@ -619,6 +708,7 @@ EXAMPLES:
         start_time=start_time,
         end_time=end_time,
         preview_only=args.preview,
+        sync_mode=args.sync_mode,
         verbose=True,
     )
 
