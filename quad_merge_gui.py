@@ -3,7 +3,7 @@
 Quad-Box Video Merger - GUI Version
 ====================================
 A tkinter-based GUI that lets you:
-1. Load two quad-box (or full-screen) AVI videos
+1. Load up to three quad-box (or full-screen) AVI videos
 2. Visually select which quadrant from which video maps to each output slot
    - Use "FULL" to scale the entire source video into one output quadrant
 3. Choose codec and output path
@@ -30,6 +30,7 @@ QUADRANT_LABELS = {
     "BL": "Bottom-Left",
     "BR": "Bottom-Right",
 }
+VIDEO_SOURCES = ["1", "2", "3"]
 
 
 def extract_quadrant(frame, quadrant_name):
@@ -83,14 +84,11 @@ class QuadMergerApp:
         self.root.resizable(True, True)
 
         # State
-        self.video1_path = tk.StringVar()
-        self.video2_path = tk.StringVar()
+        self.video_paths = [tk.StringVar(), tk.StringVar(), tk.StringVar()]
         self.output_path = tk.StringVar()
         self.codec_var = tk.StringVar(value="XVID")
-        self.video1_frame = None  # numpy RGB frame
-        self.video2_frame = None
-        self.video1_info = {}
-        self.video2_info = {}
+        self.video_frames = [None, None, None]  # numpy RGB frames for preview
+        self.video_infos = [{}, {}, {}]
 
         # Mapping: output quadrant -> (video_number_str, source_quadrant)
         self.mapping_vars = {}
@@ -115,31 +113,32 @@ class QuadMergerApp:
         file_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
         file_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(file_frame, text="Video 1:").grid(row=0, column=0, sticky="w", padx=(0, 5))
-        ttk.Entry(file_frame, textvariable=self.video1_path, width=50).grid(row=0, column=1, sticky="ew")
-        ttk.Button(file_frame, text="Browse...", command=self._browse_video1).grid(row=0, column=2, padx=(5, 0))
+        self.video_info_labels = []
+        video_labels = ["Video 1:", "Video 2:", "Video 3 (optional):"]
+        browse_commands = [self._browse_video1, self._browse_video2, self._browse_video3]
 
-        ttk.Label(file_frame, text="Video 2:").grid(row=1, column=0, sticky="w", padx=(0, 5), pady=(5, 0))
-        ttk.Entry(file_frame, textvariable=self.video2_path, width=50).grid(row=1, column=1, sticky="ew", pady=(5, 0))
-        ttk.Button(file_frame, text="Browse...", command=self._browse_video2).grid(row=1, column=2, padx=(5, 0), pady=(5, 0))
+        for i in range(3):
+            row_offset = i * 2
+            ttk.Label(file_frame, text=video_labels[i]).grid(row=row_offset, column=0, sticky="w", padx=(0, 5), pady=(5 if i > 0 else 0, 0))
+            ttk.Entry(file_frame, textvariable=self.video_paths[i], width=50).grid(row=row_offset, column=1, sticky="ew", pady=(5 if i > 0 else 0, 0))
+            ttk.Button(file_frame, text="Browse...", command=browse_commands[i]).grid(row=row_offset, column=2, padx=(5, 0), pady=(5 if i > 0 else 0, 0))
 
-        # Video info labels
-        self.video1_info_label = ttk.Label(file_frame, text="", foreground="gray")
-        self.video1_info_label.grid(row=2, column=0, columnspan=3, sticky="w", pady=(2, 0))
-        self.video2_info_label = ttk.Label(file_frame, text="", foreground="gray")
-        self.video2_info_label.grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 0))
+            info_label = ttk.Label(file_frame, text="", foreground="gray")
+            info_label.grid(row=row_offset + 1, column=0, columnspan=3, sticky="w", pady=(2, 0))
+            self.video_info_labels.append(info_label)
 
         # --- Section 2: Preview ---
         preview_frame = ttk.LabelFrame(main_frame, text="2. Preview (First Frame)", padding=10)
         preview_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
-        self.preview1_label = ttk.Label(preview_frame, text="[Load Video 1]", anchor="center")
-        self.preview1_label.grid(row=0, column=0, padx=(0, 10))
-        self.preview2_label = ttk.Label(preview_frame, text="[Load Video 2]", anchor="center")
-        self.preview2_label.grid(row=0, column=1, padx=(10, 0))
+        self.preview_labels = []
+        video_colors = ["blue", "green", "purple"]
+        for i in range(3):
+            label = ttk.Label(preview_frame, text=f"[Load Video {i+1}]", anchor="center")
+            label.grid(row=0, column=i, padx=10)
+            self.preview_labels.append(label)
 
-        ttk.Label(preview_frame, text="Video 1", foreground="blue").grid(row=1, column=0)
-        ttk.Label(preview_frame, text="Video 2", foreground="green").grid(row=1, column=1)
+            ttk.Label(preview_frame, text=f"Video {i+1}", foreground=video_colors[i]).grid(row=1, column=i)
 
         # --- Section 3: Quadrant Mapping ---
         map_frame = ttk.LabelFrame(main_frame, text="3. Map Quadrants", padding=10)
@@ -163,7 +162,7 @@ class QuadMergerApp:
             vid_combo = ttk.Combobox(
                 map_frame,
                 textvariable=self.mapping_vars[q]["video"],
-                values=["1", "2"],
+                values=VIDEO_SOURCES,
                 width=8,
                 state="readonly",
             )
@@ -213,22 +212,23 @@ class QuadMergerApp:
         self.status_label.grid(row=2, column=0, sticky="w", pady=(5, 0))
 
     def _browse_video1(self):
-        path = filedialog.askopenfilename(
-            title="Select Video 1",
-            filetypes=[("AVI files", "*.avi"), ("All video files", "*.avi *.mp4 *.mkv *.mov"), ("All files", "*.*")],
-        )
-        if path:
-            self.video1_path.set(path)
-            self._load_video_preview(1, path)
+        self._browse_video(0)
 
     def _browse_video2(self):
+        self._browse_video(1)
+
+    def _browse_video3(self):
+        self._browse_video(2)
+
+    def _browse_video(self, index):
+        """Open file dialog for a video slot."""
         path = filedialog.askopenfilename(
-            title="Select Video 2",
+            title=f"Select Video {index + 1}",
             filetypes=[("AVI files", "*.avi"), ("All video files", "*.avi *.mp4 *.mkv *.mov"), ("All files", "*.*")],
         )
         if path:
-            self.video2_path.set(path)
-            self._load_video_preview(2, path)
+            self.video_paths[index].set(path)
+            self._load_video_preview(index, path)
 
     def _browse_output(self):
         path = filedialog.asksaveasfilename(
@@ -239,7 +239,7 @@ class QuadMergerApp:
         if path:
             self.output_path.set(path)
 
-    def _load_video_preview(self, video_num, path):
+    def _load_video_preview(self, index, path):
         """Load a video, show preview and info."""
         cap = cv2.VideoCapture(path)
         if not cap.isOpened():
@@ -262,20 +262,13 @@ class QuadMergerApp:
 
         info_text = f"{os.path.basename(path)} — {w}x{h}, {fps:.1f} FPS, {total} frames"
 
-        if video_num == 1:
-            self.video1_frame = frame_rgb
-            self.video1_info = {"w": w, "h": h, "fps": fps, "total": total}
-            self.video1_info_label.config(text=f"  Video 1: {info_text}")
-            tk_img = frame_to_tk_image(frame_rgb, max_size=(300, 225))
-            self.preview1_label.config(image=tk_img, text="")
-            self.preview1_label._img = tk_img  # keep reference
-        else:
-            self.video2_frame = frame_rgb
-            self.video2_info = {"w": w, "h": h, "fps": fps, "total": total}
-            self.video2_info_label.config(text=f"  Video 2: {info_text}")
-            tk_img = frame_to_tk_image(frame_rgb, max_size=(300, 225))
-            self.preview2_label.config(image=tk_img, text="")
-            self.preview2_label._img = tk_img
+        self.video_frames[index] = frame_rgb
+        self.video_infos[index] = {"w": w, "h": h, "fps": fps, "total": total}
+        self.video_info_labels[index].config(text=f"  Video {index + 1}: {info_text}")
+
+        tk_img = frame_to_tk_image(frame_rgb, max_size=(220, 165))
+        self.preview_labels[index].config(image=tk_img, text="")
+        self.preview_labels[index]._img = tk_img  # keep reference
 
     def _get_mapping(self):
         """Get mapping dict from GUI controls."""
@@ -286,23 +279,41 @@ class QuadMergerApp:
             mapping[q] = (vid_num - 1, src_quad)  # 0-based index
         return mapping
 
+    def _get_used_videos(self):
+        """Determine which video indices are referenced in the mapping."""
+        mapping = self._get_mapping()
+        return set(vid_idx for vid_idx, _ in mapping.values())
+
     def _validate(self):
         """Validate all inputs before merging."""
-        if not self.video1_path.get():
+        if not self.video_paths[0].get():
             messagebox.showwarning("Missing Input", "Please select Video 1.")
             return False
-        if not self.video2_path.get():
+        if not self.video_paths[1].get():
             messagebox.showwarning("Missing Input", "Please select Video 2.")
             return False
         if not self.output_path.get():
             messagebox.showwarning("Missing Input", "Please select an output file path.")
             return False
-        if not os.path.isfile(self.video1_path.get()):
-            messagebox.showerror("Error", f"Video 1 not found: {self.video1_path.get()}")
+        if not os.path.isfile(self.video_paths[0].get()):
+            messagebox.showerror("Error", f"Video 1 not found: {self.video_paths[0].get()}")
             return False
-        if not os.path.isfile(self.video2_path.get()):
-            messagebox.showerror("Error", f"Video 2 not found: {self.video2_path.get()}")
+        if not os.path.isfile(self.video_paths[1].get()):
+            messagebox.showerror("Error", f"Video 2 not found: {self.video_paths[1].get()}")
             return False
+
+        # Check if Video 3 is needed but not provided
+        used_videos = self._get_used_videos()
+        if 2 in used_videos:  # index 2 = Video 3
+            if not self.video_paths[2].get():
+                messagebox.showwarning("Missing Input",
+                    "Your mapping references Video 3 but no Video 3 is loaded.\n"
+                    "Please select Video 3 or change the mapping.")
+                return False
+            if not os.path.isfile(self.video_paths[2].get()):
+                messagebox.showerror("Error", f"Video 3 not found: {self.video_paths[2].get()}")
+                return False
+
         return True
 
     def _start_merge(self):
@@ -321,60 +332,73 @@ class QuadMergerApp:
         """Perform the actual merge (runs in background thread)."""
         try:
             mapping = self._get_mapping()
-            video1_path = self.video1_path.get()
-            video2_path = self.video2_path.get()
             output_path = self.output_path.get()
             codec = self.codec_var.get()
 
-            cap1 = cv2.VideoCapture(video1_path)
-            cap2 = cv2.VideoCapture(video2_path)
+            # Determine which videos are needed
+            used_videos = self._get_used_videos()
+            max_vid_idx = max(used_videos)
 
-            if not cap1.isOpened() or not cap2.isOpened():
-                self._update_status("Error: Cannot open one or both videos.", "red")
-                self._enable_button()
-                return
+            # Open all needed input videos
+            caps = []
+            video_info_list = []
+            for i in range(max_vid_idx + 1):
+                path = self.video_paths[i].get()
+                cap = cv2.VideoCapture(path)
+                if not cap.isOpened():
+                    self._update_status(f"Error: Cannot open Video {i + 1}.", "red")
+                    for c in caps:
+                        c.release()
+                    self._enable_button()
+                    return
+                caps.append(cap)
 
-            w1 = int(cap1.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h1 = int(cap1.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            fps1 = cap1.get(cv2.CAP_PROP_FPS)
-            total1 = int(cap1.get(cv2.CAP_PROP_FRAME_COUNT))
+                w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                video_info_list.append({"w": w, "h": h, "fps": fps, "total": total})
 
-            w2 = int(cap2.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h2 = int(cap2.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            total2 = int(cap2.get(cv2.CAP_PROP_FRAME_COUNT))
-
-            out_w = max(w1, w2)
-            out_h = max(h1, h2)
+            # Output dimensions: largest of all inputs
+            out_w = max(info["w"] for info in video_info_list)
+            out_h = max(info["h"] for info in video_info_list)
             out_w = out_w + (out_w % 2)
             out_h = out_h + (out_h % 2)
 
-            total_frames = min(total1, total2)
+            fps1 = video_info_list[0]["fps"]
+            total_frames = min(info["total"] for info in video_info_list)
 
             fourcc = cv2.VideoWriter_fourcc(*codec)
             writer = cv2.VideoWriter(output_path, fourcc, fps1, (out_w, out_h))
 
             if not writer.isOpened():
                 self._update_status(f"Error: Cannot create output file with codec '{codec}'.", "red")
-                cap1.release()
-                cap2.release()
+                for cap in caps:
+                    cap.release()
                 self._enable_button()
                 return
 
             frame_count = 0
 
             while True:
-                ret1, frame1 = cap1.read()
-                ret2, frame2 = cap2.read()
+                frames = []
+                all_ok = True
+                for cap in caps:
+                    ret, frame = cap.read()
+                    if not ret:
+                        all_ok = False
+                        break
+                    frames.append(frame)
 
-                if not ret1 or not ret2:
+                if not all_ok:
                     break
 
-                if frame1.shape[1] != out_w or frame1.shape[0] != out_h:
-                    frame1 = cv2.resize(frame1, (out_w, out_h))
-                if frame2.shape[1] != out_w or frame2.shape[0] != out_h:
-                    frame2 = cv2.resize(frame2, (out_w, out_h))
+                # Resize frames to match output dimensions if needed
+                for i in range(len(frames)):
+                    if frames[i].shape[1] != out_w or frames[i].shape[0] != out_h:
+                        frames[i] = cv2.resize(frames[i], (out_w, out_h))
 
-                output_frame = self._build_output_frame([frame1, frame2], mapping, (out_w, out_h))
+                output_frame = self._build_output_frame(frames, mapping, (out_w, out_h))
                 writer.write(output_frame)
 
                 frame_count += 1
@@ -385,8 +409,8 @@ class QuadMergerApp:
                 if frame_count % 50 == 0:
                     self._update_status(f"Processing: {frame_count}/{total_frames} frames...", "black")
 
-            cap1.release()
-            cap2.release()
+            for cap in caps:
+                cap.release()
             writer.release()
 
             self._update_progress(100)
@@ -443,7 +467,7 @@ class QuadMergerApp:
 
 def main():
     root = tk.Tk()
-    root.geometry("700x650")
+    root.geometry("750x720")
     app = QuadMergerApp(root)
     root.mainloop()
 

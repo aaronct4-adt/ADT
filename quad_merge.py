@@ -2,9 +2,9 @@
 """
 Quad-Box Video Merger
 =====================
-Takes two AVI videos that are each in a 2x2 quad-box layout,
-lets you pick which quadrant from which source video maps to
-each quadrant of the output, then exports the merged result.
+Takes up to three AVI videos that are each in a 2x2 quad-box layout
+(or full-screen), lets you pick which quadrant from which source video
+maps to each quadrant of the output, then exports the merged result.
 
 You can also use FULL to take the entire frame from a video
 and scale it into one of the output quadrants (useful for
@@ -21,14 +21,17 @@ Usage:
     python quad_merge.py --video1 input1.avi --video2 input2.avi --output merged.avi \
         --map TL=1:TL TR=2:TR BL=1:BL BR=2:BR
 
+    python quad_merge.py --video1 input1.avi --video2 input2.avi --video3 input3.avi \
+        --output merged.avi --map TL=1:TL TR=2:TR BL=3:BL BR=3:FULL
+
     The --map argument defines the output layout:
         <output_quadrant>=<source_video>:<source_quadrant>
 
     Example: TL=2:BR means "output's top-left gets video 2's bottom-right"
-    Example: BL=2:FULL means "output's bottom-left gets all of video 2 scaled to fit"
+    Example: BL=3:FULL means "output's bottom-left gets all of video 3 scaled to fit"
 
     Valid quadrant names: TL, TR, BL, BR, FULL
-    Valid video sources: 1, 2
+    Valid video sources: 1, 2, 3
 """
 
 import argparse
@@ -39,15 +42,17 @@ import numpy as np
 
 QUADRANT_NAMES = ["TL", "TR", "BL", "BR"]
 SOURCE_QUADRANTS = ["TL", "TR", "BL", "BR", "FULL"]
+MAX_VIDEOS = 3
 
 
-def parse_mapping(map_args):
+def parse_mapping(map_args, num_videos):
     """
     Parse mapping arguments like 'TL=1:TR' into a dict.
     Returns: {output_quad: (video_index, source_quad)}
-        video_index is 0-based internally (0 or 1)
+        video_index is 0-based internally (0, 1, or 2)
         source_quad can be TL, TR, BL, BR, or FULL
     """
+    valid_vid_nums = list(range(1, num_videos + 1))
     mapping = {}
     for entry in map_args:
         try:
@@ -63,8 +68,8 @@ def parse_mapping(map_args):
             if src_quad not in SOURCE_QUADRANTS:
                 print(f"Error: Invalid source quadrant '{src_quad}'. Must be one of {SOURCE_QUADRANTS}")
                 sys.exit(1)
-            if vid_num not in (1, 2):
-                print(f"Error: Video number must be 1 or 2, got '{vid_num}'")
+            if vid_num not in valid_vid_nums:
+                print(f"Error: Video number must be one of {valid_vid_nums}, got '{vid_num}'")
                 sys.exit(1)
 
             mapping[out_quad] = (vid_num - 1, src_quad)  # store 0-based index
@@ -111,7 +116,7 @@ def build_output_frame(frames, mapping, output_size):
     Build the output frame by assembling quadrants from source frames.
 
     Args:
-        frames: list of two frames [frame_from_video1, frame_from_video2]
+        frames: list of frames [frame_from_video1, frame_from_video2, ...]
         mapping: {output_quad: (video_index, source_quad)}
         output_size: (width, height) of the output video
     """
@@ -144,7 +149,7 @@ def build_output_frame(frames, mapping, output_size):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Merge quadrants from two quad-box AVI videos into one output video.",
+        description="Merge quadrants from up to three quad-box AVI videos into one output video.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Quadrant Layout:
@@ -159,6 +164,7 @@ Mapping Format:
 
     Source quadrant can be: TL, TR, BL, BR, or FULL
     Use FULL to scale the entire source video into one output quadrant.
+    Video number can be 1, 2, or 3 (if --video3 is provided).
 
 Examples:
     python quad_merge.py --video1 cam1.avi --video2 cam2.avi --output merged.avi \\
@@ -170,18 +176,24 @@ Examples:
         --map TL=1:TL TR=1:TR BL=1:BL BR=2:FULL
 
     This takes 3 quadrants from video 1, and scales all of video 2 into the bottom-right.
+
+    python quad_merge.py --video1 a.avi --video2 b.avi --video3 c.avi --output merged.avi \\
+        --map TL=1:TL TR=2:TR BL=3:BL BR=3:FULL
+
+    This mixes quadrants from all three source videos.
         """,
     )
 
-    parser.add_argument("--video1", required=True, help="Path to first input AVI video")
-    parser.add_argument("--video2", required=True, help="Path to second input AVI video")
+    parser.add_argument("--video1", required=True, help="Path to first input video")
+    parser.add_argument("--video2", required=True, help="Path to second input video")
+    parser.add_argument("--video3", default=None, help="Path to third input video (optional)")
     parser.add_argument("--output", required=True, help="Path for output AVI video")
     parser.add_argument(
         "--map",
         nargs=4,
         required=True,
         metavar="QUAD=VID:QUAD",
-        help="Four quadrant mappings, e.g. TL=1:TL TR=2:TR BL=1:BL BR=2:FULL (use FULL for entire frame)",
+        help="Four quadrant mappings, e.g. TL=1:TL TR=2:TR BL=3:BL BR=3:FULL",
     )
     parser.add_argument(
         "--codec",
@@ -197,43 +209,49 @@ Examples:
 
     args = parser.parse_args()
 
+    # Determine how many videos we have
+    video_paths = [args.video1, args.video2]
+    if args.video3:
+        video_paths.append(args.video3)
+    num_videos = len(video_paths)
+
     # Parse the quadrant mapping
-    mapping = parse_mapping(args.map)
+    mapping = parse_mapping(args.map, num_videos)
+
+    # Validate that mapping doesn't reference video3 if it wasn't provided
+    for out_q, (vid_idx, src_q) in mapping.items():
+        if vid_idx >= num_videos:
+            print(f"Error: Mapping references video {vid_idx + 1} but --video3 was not provided.")
+            sys.exit(1)
 
     # Open input videos
-    cap1 = cv2.VideoCapture(args.video1)
-    cap2 = cv2.VideoCapture(args.video2)
-
-    if not cap1.isOpened():
-        print(f"Error: Cannot open video1: {args.video1}")
-        sys.exit(1)
-    if not cap2.isOpened():
-        print(f"Error: Cannot open video2: {args.video2}")
-        sys.exit(1)
+    caps = []
+    for i, path in enumerate(video_paths):
+        cap = cv2.VideoCapture(path)
+        if not cap.isOpened():
+            print(f"Error: Cannot open video{i + 1}: {path}")
+            sys.exit(1)
+        caps.append(cap)
 
     # Get video properties
-    w1 = int(cap1.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h1 = int(cap1.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps1 = cap1.get(cv2.CAP_PROP_FPS)
-    total1 = int(cap1.get(cv2.CAP_PROP_FRAME_COUNT))
+    video_info = []
+    for i, cap in enumerate(caps):
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        video_info.append({"w": w, "h": h, "fps": fps, "total": total})
+        print(f"Video {i + 1}: {w}x{h} @ {fps:.2f} FPS, {total} frames")
 
-    w2 = int(cap2.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h2 = int(cap2.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps2 = cap2.get(cv2.CAP_PROP_FPS)
-    total2 = int(cap2.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    print(f"Video 1: {w1}x{h1} @ {fps1:.2f} FPS, {total1} frames")
-    print(f"Video 2: {w2}x{h2} @ {fps2:.2f} FPS, {total2} frames")
-
-    # Output dimensions match video1 (or the larger of the two)
-    out_w = max(w1, w2)
-    out_h = max(h1, h2)
+    # Output dimensions: use the largest of all inputs
+    out_w = max(info["w"] for info in video_info)
+    out_h = max(info["h"] for info in video_info)
     # Ensure even dimensions for codec compatibility
     out_w = out_w + (out_w % 2)
     out_h = out_h + (out_h % 2)
 
-    out_fps = args.fps if args.fps else fps1
-    total_frames = min(total1, total2)
+    out_fps = args.fps if args.fps else video_info[0]["fps"]
+    total_frames = min(info["total"] for info in video_info)
 
     print(f"Output: {out_w}x{out_h} @ {out_fps:.2f} FPS, {total_frames} frames")
     print(f"Mapping:")
@@ -255,19 +273,24 @@ Examples:
     print("\nProcessing...")
 
     while True:
-        ret1, frame1 = cap1.read()
-        ret2, frame2 = cap2.read()
+        frames = []
+        all_ok = True
+        for cap in caps:
+            ret, frame = cap.read()
+            if not ret:
+                all_ok = False
+                break
+            frames.append(frame)
 
-        if not ret1 or not ret2:
+        if not all_ok:
             break
 
         # Resize frames to match output dimensions if needed
-        if frame1.shape[1] != out_w or frame1.shape[0] != out_h:
-            frame1 = cv2.resize(frame1, (out_w, out_h))
-        if frame2.shape[1] != out_w or frame2.shape[0] != out_h:
-            frame2 = cv2.resize(frame2, (out_w, out_h))
+        for i in range(len(frames)):
+            if frames[i].shape[1] != out_w or frames[i].shape[0] != out_h:
+                frames[i] = cv2.resize(frames[i], (out_w, out_h))
 
-        output_frame = build_output_frame([frame1, frame2], mapping, (out_w, out_h))
+        output_frame = build_output_frame(frames, mapping, (out_w, out_h))
         writer.write(output_frame)
 
         frame_count += 1
@@ -276,8 +299,8 @@ Examples:
             print(f"  {frame_count}/{total_frames} frames ({pct:.1f}%)")
 
     # Cleanup
-    cap1.release()
-    cap2.release()
+    for cap in caps:
+        cap.release()
     writer.release()
 
     print(f"\nDone! Wrote {frame_count} frames to: {args.output}")
