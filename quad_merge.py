@@ -333,6 +333,20 @@ def run_merge(video_paths, offsets, mapping, output_path, codec, fps_override,
     # Track start positions (frame index after all seeks) for time sync
     start_positions = [int(cap.get(cv2.CAP_PROP_POS_FRAMES)) for cap in caps]
 
+    # Estimate total output frames for progress display
+    if max_frames:
+        est_total = max_frames
+    elif sync_mode == "time":
+        # Shortest remaining duration across all videos × output FPS
+        durations = []
+        for i, cap in enumerate(caps):
+            remaining = video_info[i]["total"] - start_positions[i]
+            dur = remaining / video_info[i]["fps"] if video_info[i]["fps"] > 0 else 0
+            durations.append(dur)
+        est_total = int(min(durations) * out_fps) if durations else 0
+    else:
+        est_total = min(info["total"] for info in video_info)
+
     while True:
         if max_frames is not None and frame_count >= max_frames:
             break
@@ -347,8 +361,15 @@ def run_merge(video_paths, offsets, mapping, output_path, codec, fps_override,
 
             for i, cap in enumerate(caps):
                 src_fps = video_info[i]["fps"]
+                src_total = video_info[i]["total"]
                 # The frame number this video should be at for this output time
                 target_frame = start_positions[i] + int(output_time * src_fps)
+
+                # If target exceeds total frames, this video is exhausted
+                if target_frame >= src_total:
+                    all_ok = False
+                    break
+
                 current_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
 
                 if target_frame > current_frame:
@@ -418,8 +439,7 @@ def run_merge(video_paths, offsets, mapping, output_path, codec, fps_override,
         frame_count += 1
 
         if verbose and frame_count % 100 == 0:
-            limit = max_frames if max_frames else "?"
-            print(f"  {frame_count}/{limit} frames...")
+            print(f"  {frame_count}/{est_total} frames...")
 
     for c in caps:
         c.release()

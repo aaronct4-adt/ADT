@@ -618,7 +618,20 @@ class QuadMergerApp:
                 max_frames = int(duration * out_fps)
 
             # Estimate total for progress bar
-            total_frames_est = max_frames if max_frames else min(v["total"] for v in video_info)
+            if max_frames:
+                total_frames_est = max_frames
+            elif sync_mode == "time":
+                # In time-sync mode, output frames = shortest duration × output FPS
+                durations = []
+                for i, v in enumerate(video_info):
+                    remaining_frames = v["total"] - int(caps[i].get(cv2.CAP_PROP_POS_FRAMES))
+                    duration_secs = remaining_frames / v["fps"] if v["fps"] > 0 else 0
+                    durations.append(duration_secs)
+                shortest_duration = min(durations) if durations else 0
+                total_frames_est = int(shortest_duration * out_fps)
+            else:
+                # In framerate mode, output frames = min frame count across sources
+                total_frames_est = min(v["total"] for v in video_info)
 
             fourcc = cv2.VideoWriter_fourcc(*codec)
             writer = cv2.VideoWriter(output_path, fourcc, out_fps, (out_w, out_h))
@@ -643,7 +656,14 @@ class QuadMergerApp:
                     output_time = frame_count / out_fps
                     for i, cap in enumerate(caps):
                         src_fps = video_info[i]["fps"]
+                        src_total = video_info[i]["total"]
                         target_frame = start_positions[i] + int(output_time * src_fps)
+
+                        # If target exceeds total frames, this video is exhausted
+                        if target_frame >= src_total:
+                            all_ok = False
+                            break
+
                         current_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
 
                         if target_frame > current_frame:
