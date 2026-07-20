@@ -192,6 +192,7 @@ def save_preset(args, path):
         "start_time": args.start_time,
         "end_time": args.end_time,
         "sync_mode": args.sync_mode,
+        "hold_last_frame": args.hold_last_frame,
     }
     with open(path, "w") as f:
         json.dump(preset, f, indent=2)
@@ -211,7 +212,8 @@ def load_preset(path):
 
 
 def run_merge(video_paths, offsets, mapping, output_path, codec, fps_override,
-              start_time, end_time, preview_only=False, sync_mode="time", verbose=True):
+              start_time, end_time, preview_only=False, sync_mode="time",
+              hold_last_frame=False, verbose=True):
     """
     Core merge function. Used by both single and batch modes.
 
@@ -227,6 +229,9 @@ def run_merge(video_paths, offsets, mapping, output_path, codec, fps_override,
         preview_only: if True, export only the first merged frame as a JPEG
         sync_mode: "time" (lock real-time, skip/duplicate frames) or
                    "framerate" (one source frame per output frame, no compensation)
+        hold_last_frame: if True, when a video ends its last frame is frozen
+                         until ALL videos are exhausted. If False, merge stops
+                         as soon as any video ends.
         verbose: print progress
     Returns:
         frame_count written, or None on error
@@ -337,15 +342,21 @@ def run_merge(video_paths, offsets, mapping, output_path, codec, fps_override,
     if max_frames:
         est_total = max_frames
     elif sync_mode == "time":
-        # Shortest remaining duration across all videos × output FPS
+        # Duration-based estimate: shortest or longest depending on hold mode
         durations = []
         for i, cap in enumerate(caps):
             remaining = video_info[i]["total"] - start_positions[i]
             dur = remaining / video_info[i]["fps"] if video_info[i]["fps"] > 0 else 0
             durations.append(dur)
-        est_total = int(min(durations) * out_fps) if durations else 0
+        if hold_last_frame:
+            est_total = int(max(durations) * out_fps) if durations else 0
+        else:
+            est_total = int(min(durations) * out_fps) if durations else 0
     else:
-        est_total = min(info["total"] for info in video_info)
+        if hold_last_frame:
+            est_total = max(info["total"] for info in video_info)
+        else:
+            est_total = min(info["total"] for info in video_info)
 
     while True:
         if max_frames is not None and frame_count >= max_frames:
@@ -358,6 +369,7 @@ def run_merge(video_paths, offsets, mapping, output_path, codec, fps_override,
             # Time-lock mode: calculate which frame each video should be at
             # based on elapsed output time
             output_time = frame_count / out_fps  # seconds elapsed in output
+            all_exhausted = True  # track if ALL videos are done
 
             for i, cap in enumerate(caps):
                 src_fps = video_info[i]["fps"]
@@ -367,69 +379,86 @@ def run_merge(video_paths, offsets, mapping, output_path, codec, fps_override,
 
                 # If target exceeds total frames, this video is exhausted
                 if target_frame >= src_total:
-                    all_ok = False
-                    break
-
-                current_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
-
-                if target_frame > current_frame:
-                    # Need to skip ahead — seek or read forward
-                    if target_frame - current_frame > 10:
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+                    if hold_last_frame and last_frames[i] is not None:
+                        # Hold: use the last frame we have
+                        frame = last_frames[i]
                     else:
-                        # Read and discard frames to advance
-                        for _ in range(target_frame - current_frame - 1):
-                            ret = cap.grab()
-                            if not ret:
-                                break
-
-                    ret, frame = cap.read()
-                    if ret:
-                        last_frames[i] = frame
-                    elif last_frames[i] is not None:
-                        frame = last_frames[i]  # hold last frame
-                        ret = True
-                    else:
+                        # Stop: this video is done and we don't hold
                         all_ok = False
                         break
-                elif target_frame == current_frame:
-                    # Read next frame normally
-                    ret, frame = cap.read()
-                    if ret:
-                        last_frames[i] = frame
-                    elif last_frames[i] is not None:
+                else:
+                    all_exhausted = False
+                    current_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+
+                    if target_frame > current_frame:
+                        # Need to skip ahead — seek or read forward
+                        if target_frame - current_frame > 10:
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+                        else:
+                            # Read and discard frames to advance
+                            for _ in range(target_frame - current_frame - 1):
+                                ret = cap.grab()
+                                if not ret:
+                                    break
+
+                        ret, frame = cap.read()
+                        if ret:
+                            last_frames[i] = frame
+                        elif last_frames[i] is not None:
+                            frame = last_frames[i]
+                        else:
+                            all_ok = False
+                            break
+                    elif target_frame == current_frame:
+                        # Read next frame normally
+                        ret, frame = cap.read()
+                        if ret:
+                            last_frames[i] = frame
+                        elif last_frames[i] is not None:
+                            frame = last_frames[i]
+                        else:
+                            all_ok = False
+                            break
+                    else:
+                        # Target is behind current — use last frame (duplicate)
+                        if last_frames[i] is not None:
+                            frame = last_frames[i]
+                        else:
+                            ret, frame = cap.read()
+                            if not ret:
+                                all_ok = False
+                                break
+                            last_frames[i] = frame
+
+                if frame.shape[1] != out_w or frame.shape[0] != out_h:
+                    frame = cv2.resize(frame, (out_w, out_h))
+                frames.append(frame)
+
+            # If holding last frame and ALL videos are exhausted, we're done
+            if hold_last_frame and all_exhausted:
+                all_ok = False
+
+        else:
+            # Framerate-lock mode: read one frame per video per output frame
+            all_exhausted = True
+            for i, cap in enumerate(caps):
+                ret, frame = cap.read()
+                if not ret:
+                    if hold_last_frame and last_frames[i] is not None:
                         frame = last_frames[i]
-                        ret = True
                     else:
                         all_ok = False
                         break
                 else:
-                    # Target is behind current (shouldn't happen in forward play)
-                    # Use last frame (duplicate)
-                    if last_frames[i] is not None:
-                        frame = last_frames[i]
-                    else:
-                        ret, frame = cap.read()
-                        if not ret:
-                            all_ok = False
-                            break
-                        last_frames[i] = frame
-
+                    all_exhausted = False
+                    last_frames[i] = frame
                 if frame.shape[1] != out_w or frame.shape[0] != out_h:
                     frame = cv2.resize(frame, (out_w, out_h))
                 frames.append(frame)
 
-        else:
-            # Framerate-lock mode: read one frame per video per output frame
-            for i, cap in enumerate(caps):
-                ret, frame = cap.read()
-                if not ret:
-                    all_ok = False
-                    break
-                last_frames[i] = frame
-                if frame.shape[1] != out_w or frame.shape[0] != out_h:
-                    frame = cv2.resize(frame, (out_w, out_h))
-                frames.append(frame)
+            # If holding and ALL videos exhausted, stop
+            if hold_last_frame and all_exhausted:
+                all_ok = False
 
         if not all_ok:
             break
@@ -530,6 +559,7 @@ def run_batch(batch_config_path):
         start_time = time_to_seconds(job.get("start_time")) if job.get("start_time") else 0.0
         end_time = time_to_seconds(job.get("end_time")) if job.get("end_time") else None
         sync_mode = job.get("sync_mode", "time")
+        hold_last = job.get("hold_last_frame", False)
 
         result = run_merge(
             video_paths=video_paths,
@@ -541,6 +571,7 @@ def run_batch(batch_config_path):
             start_time=start_time,
             end_time=end_time,
             sync_mode=sync_mode,
+            hold_last_frame=hold_last,
             verbose=True,
         )
 
@@ -652,6 +683,10 @@ EXAMPLES:
                              "(skips/duplicates frames to match); 'framerate' reads one "
                              "frame per video per output frame with no compensation "
                              "(default: time)")
+    parser.add_argument("--hold-last-frame", action="store_true",
+                        help="When a video ends before others, freeze its last frame "
+                             "until all videos are done. Without this flag, the merge "
+                             "stops when any video runs out.")
 
     # Modes
     parser.add_argument("--preview", action="store_true",
@@ -729,6 +764,7 @@ EXAMPLES:
         end_time=end_time,
         preview_only=args.preview,
         sync_mode=args.sync_mode,
+        hold_last_frame=args.hold_last_frame,
         verbose=True,
     )
 

@@ -106,6 +106,7 @@ class QuadMergerApp:
         self.start_time_var = tk.StringVar(value="")
         self.end_time_var = tk.StringVar(value="")
         self.sync_mode_var = tk.StringVar(value="Lock Time")
+        self.hold_last_frame_var = tk.BooleanVar(value=False)
 
         # Mapping
         self.mapping_vars = {}
@@ -235,9 +236,14 @@ class QuadMergerApp:
                        "Lock Frame Rate = native playback (slow-mo preserved).",
                   foreground="gray", font=("", 8)).grid(row=0, column=2)
 
+        # Hold last frame checkbox
+        ttk.Checkbutton(frame, text="Hold last frame (when a video ends, freeze it until all others finish)",
+                        variable=self.hold_last_frame_var).grid(
+            row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
         # Frame range
         range_frame = ttk.Frame(frame)
-        range_frame.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        range_frame.grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Label(range_frame, text="Start Time:").grid(row=0, column=0, padx=(0, 4))
         ttk.Entry(range_frame, textvariable=self.start_time_var, width=10).grid(row=0, column=1, padx=(0, 16))
         ttk.Label(range_frame, text="End Time:").grid(row=0, column=2, padx=(0, 4))
@@ -247,7 +253,7 @@ class QuadMergerApp:
 
         # Preset buttons
         preset_frame = ttk.Frame(frame)
-        preset_frame.grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        preset_frame.grid(row=5, column=0, columnspan=3, sticky="w", pady=(8, 0))
         ttk.Label(preset_frame, text="Preset:").grid(row=0, column=0, padx=(0, 6))
         ttk.Button(preset_frame, text="Save Preset", command=self._save_preset).grid(row=0, column=1, padx=(0, 6))
         ttk.Button(preset_frame, text="Load Preset", command=self._load_preset).grid(row=0, column=2)
@@ -348,6 +354,7 @@ class QuadMergerApp:
             "start_time": self.start_time_var.get(),
             "end_time": self.end_time_var.get(),
             "sync_mode": self.sync_mode_var.get(),
+            "hold_last_frame": self.hold_last_frame_var.get(),
         }
         with open(path, "w") as f:
             json.dump(preset, f, indent=2)
@@ -385,6 +392,7 @@ class QuadMergerApp:
         self.start_time_var.set(preset.get("start_time", "") or "")
         self.end_time_var.set(preset.get("end_time", "") or "")
         self.sync_mode_var.set(preset.get("sync_mode", "Lock Time") or "Lock Time")
+        self.hold_last_frame_var.set(preset.get("hold_last_frame", False))
 
         messagebox.showinfo("Preset Loaded", f"Preset loaded from:\n{path}")
 
@@ -459,8 +467,9 @@ class QuadMergerApp:
 
         # Convert GUI label to internal mode string
         sync_mode = "time" if self.sync_mode_var.get() == "Lock Time" else "framerate"
+        hold_last = self.hold_last_frame_var.get()
 
-        return video_paths, offsets, mapping, start_t, end_t, sync_mode
+        return video_paths, offsets, mapping, start_t, end_t, sync_mode, hold_last
 
     def _disable_buttons(self):
         self.merge_btn.config(state="disabled")
@@ -489,7 +498,7 @@ class QuadMergerApp:
 
     def _do_preview(self):
         try:
-            video_paths, offsets, mapping, start_t, _, _sync = self._build_run_params()
+            video_paths, offsets, mapping, start_t, _, _sync, _hold = self._build_run_params()
 
             caps = []
             frames = []
@@ -574,7 +583,7 @@ class QuadMergerApp:
 
     def _do_merge(self):
         try:
-            video_paths, offsets, mapping, start_t, end_t, sync_mode = self._build_run_params()
+            video_paths, offsets, mapping, start_t, end_t, sync_mode, hold_last = self._build_run_params()
             output_path = self.output_path.get()
             codec = self.codec_var.get()
 
@@ -621,17 +630,23 @@ class QuadMergerApp:
             if max_frames:
                 total_frames_est = max_frames
             elif sync_mode == "time":
-                # In time-sync mode, output frames = shortest duration × output FPS
+                # In time-sync mode, output frames = duration × output FPS
                 durations = []
                 for i, v in enumerate(video_info):
                     remaining_frames = v["total"] - int(caps[i].get(cv2.CAP_PROP_POS_FRAMES))
                     duration_secs = remaining_frames / v["fps"] if v["fps"] > 0 else 0
                     durations.append(duration_secs)
-                shortest_duration = min(durations) if durations else 0
-                total_frames_est = int(shortest_duration * out_fps)
+                if hold_last:
+                    target_duration = max(durations) if durations else 0
+                else:
+                    target_duration = min(durations) if durations else 0
+                total_frames_est = int(target_duration * out_fps)
             else:
-                # In framerate mode, output frames = min frame count across sources
-                total_frames_est = min(v["total"] for v in video_info)
+                # In framerate mode, output frames based on frame counts
+                if hold_last:
+                    total_frames_est = max(v["total"] for v in video_info)
+                else:
+                    total_frames_est = min(v["total"] for v in video_info)
 
             fourcc = cv2.VideoWriter_fourcc(*codec)
             writer = cv2.VideoWriter(output_path, fourcc, out_fps, (out_w, out_h))
@@ -654,6 +669,7 @@ class QuadMergerApp:
 
                 if sync_mode == "time":
                     output_time = frame_count / out_fps
+                    all_exhausted = True
                     for i, cap in enumerate(caps):
                         src_fps = video_info[i]["fps"]
                         src_total = video_info[i]["total"]
@@ -661,58 +677,74 @@ class QuadMergerApp:
 
                         # If target exceeds total frames, this video is exhausted
                         if target_frame >= src_total:
-                            all_ok = False
-                            break
-
-                        current_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
-
-                        if target_frame > current_frame:
-                            if target_frame - current_frame > 10:
-                                cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
-                            else:
-                                for _ in range(target_frame - current_frame - 1):
-                                    if not cap.grab():
-                                        break
-                            ret, frame = cap.read()
-                            if ret:
-                                last_frames[i] = frame
-                            elif last_frames[i] is not None:
-                                frame = last_frames[i]
-                            else:
-                                all_ok = False
-                                break
-                        elif target_frame == current_frame:
-                            ret, frame = cap.read()
-                            if ret:
-                                last_frames[i] = frame
-                            elif last_frames[i] is not None:
+                            if hold_last and last_frames[i] is not None:
                                 frame = last_frames[i]
                             else:
                                 all_ok = False
                                 break
                         else:
-                            if last_frames[i] is not None:
-                                frame = last_frames[i]
-                            else:
+                            all_exhausted = False
+                            current_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+
+                            if target_frame > current_frame:
+                                if target_frame - current_frame > 10:
+                                    cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+                                else:
+                                    for _ in range(target_frame - current_frame - 1):
+                                        if not cap.grab():
+                                            break
                                 ret, frame = cap.read()
-                                if not ret:
+                                if ret:
+                                    last_frames[i] = frame
+                                elif last_frames[i] is not None:
+                                    frame = last_frames[i]
+                                else:
                                     all_ok = False
                                     break
-                                last_frames[i] = frame
+                            elif target_frame == current_frame:
+                                ret, frame = cap.read()
+                                if ret:
+                                    last_frames[i] = frame
+                                elif last_frames[i] is not None:
+                                    frame = last_frames[i]
+                                else:
+                                    all_ok = False
+                                    break
+                            else:
+                                if last_frames[i] is not None:
+                                    frame = last_frames[i]
+                                else:
+                                    ret, frame = cap.read()
+                                    if not ret:
+                                        all_ok = False
+                                        break
+                                    last_frames[i] = frame
 
                         if frame.shape[1] != out_w or frame.shape[0] != out_h:
                             frame = cv2.resize(frame, (out_w, out_h))
                         frames.append(frame)
+
+                    if hold_last and all_exhausted:
+                        all_ok = False
                 else:
+                    all_exhausted = True
                     for i, cap in enumerate(caps):
                         ret, frame = cap.read()
                         if not ret:
-                            all_ok = False
-                            break
-                        last_frames[i] = frame
+                            if hold_last and last_frames[i] is not None:
+                                frame = last_frames[i]
+                            else:
+                                all_ok = False
+                                break
+                        else:
+                            all_exhausted = False
+                            last_frames[i] = frame
                         if frame.shape[1] != out_w or frame.shape[0] != out_h:
                             frame = cv2.resize(frame, (out_w, out_h))
                         frames.append(frame)
+
+                    if hold_last and all_exhausted:
+                        all_ok = False
 
                 if not all_ok:
                     break
@@ -745,7 +777,7 @@ class QuadMergerApp:
 
 def main():
     root = tk.Tk()
-    root.geometry("860x820")
+    root.geometry("860x850")
     app = QuadMergerApp(root)
     root.mainloop()
 
