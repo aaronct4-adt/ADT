@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>What is Kiro?</title>
+    <title>Quad-Box Video Merger</title>
     <style>
         * {
             margin: 0;
@@ -13,7 +13,7 @@
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #0f0f1a;
+            background: #0a0a14;
             color: #ffffff;
             display: flex;
             align-items: center;
@@ -24,226 +24,10 @@
 
         .container {
             width: 100%;
-            max-width: 900px;
+            max-width: 1000px;
             text-align: center;
             position: relative;
             padding: 40px;
-        }
-
-        /* Scene management */
-        .scene {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 90%;
-            opacity: 0;
-            transition: opacity 0.6s ease;
-            pointer-events: none;
-        }
-
-        .scene.active {
-            opacity: 1;
-            pointer-events: all;
-        }
-
-        /* Scene 1: The idea */
-        .scene-1 .thought-bubble {
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            border-radius: 24px;
-            padding: 40px 50px;
-            font-size: 28px;
-            font-weight: 600;
-            display: inline-block;
-            animation: float 2s ease-in-out infinite;
-            box-shadow: 0 20px 60px rgba(102, 126, 234, 0.3);
-        }
-
-        .scene-1 .subtitle {
-            margin-top: 30px;
-            font-size: 18px;
-            color: #a0a0b0;
-        }
-
-        .scene-1 .person-icon {
-            font-size: 64px;
-            margin-bottom: 20px;
-            animation: wave 1.5s ease-in-out infinite;
-        }
-
-        /* Scene 2: Chat with Kiro */
-        .scene-2 .chat-window {
-            background: #1a1a2e;
-            border-radius: 16px;
-            padding: 30px;
-            text-align: left;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.4);
-            border: 1px solid #2a2a4a;
-        }
-
-        .scene-2 .chat-header {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 20px;
-            padding-bottom: 15px;
-            border-bottom: 1px solid #2a2a4a;
-        }
-
-        .scene-2 .kiro-logo {
-            width: 32px;
-            height: 32px;
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            font-size: 14px;
-        }
-
-        .scene-2 .chat-header span {
-            font-weight: 600;
-            font-size: 16px;
-        }
-
-        .chat-message {
-            margin-bottom: 16px;
-            opacity: 0;
-            transform: translateY(10px);
-        }
-
-        .chat-message.show {
-            opacity: 1;
-            transform: translateY(0);
-            transition: all 0.4s ease;
-        }
-
-        .chat-message.user {
-            text-align: right;
-        }
-
-        .chat-message .bubble {
-            display: inline-block;
-            padding: 12px 18px;
-            border-radius: 16px;
-            max-width: 80%;
-            font-size: 15px;
-            line-height: 1.5;
-        }
-
-        .chat-message.user .bubble {
-            background: #667eea;
-            border-bottom-right-radius: 4px;
-        }
-
-        .chat-message.kiro .bubble {
-            background: #2a2a4a;
-            border-bottom-left-radius: 4px;
-        }
-
-        /* Scene 3: Code appears */
-        .scene-3 .code-window {
-            background: #1a1a2e;
-            border-radius: 16px;
-            overflow: hidden;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.4);
-            border: 1px solid #2a2a4a;
-            text-align: left;
-        }
-
-        .scene-3 .code-header {
-            background: #12121f;
-            padding: 12px 20px;
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-
-        .scene-3 .dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-        }
-
-        .scene-3 .dot-red { background: #ff5f56; }
-        .scene-3 .dot-yellow { background: #ffbd2e; }
-        .scene-3 .dot-green { background: #27c93f; }
-
-        .scene-3 .code-body {
-            padding: 24px;
-            font-family: 'SF Mono', 'Fira Code', monospace;
-            font-size: 14px;
-            line-height: 1.8;
-        }
-
-        .scene-3 .code-line {
-            opacity: 0;
-            white-space: nowrap;
-        }
-
-        .scene-3 .code-line.show {
-            opacity: 1;
-            transition: opacity 0.3s ease;
-        }
-
-        .scene-3 .code-line .keyword { color: #c792ea; }
-        .scene-3 .code-line .function { color: #82aaff; }
-        .scene-3 .code-line .string { color: #c3e88d; }
-        .scene-3 .code-line .comment { color: #546e7a; }
-
-        .scene-3 .magic-label {
-            margin-top: 24px;
-            font-size: 18px;
-            color: #a0a0b0;
-            opacity: 0;
-            transition: opacity 0.5s ease;
-        }
-
-        .scene-3 .magic-label.show {
-            opacity: 1;
-        }
-
-        /* Scene 4: Result */
-        .scene-4 .result-card {
-            background: linear-gradient(135deg, #1a1a2e, #2a2a4a);
-            border-radius: 20px;
-            padding: 50px;
-            border: 1px solid #3a3a5a;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.4);
-        }
-
-        .scene-4 .checkmark {
-            width: 80px;
-            height: 80px;
-            background: linear-gradient(135deg, #27c93f, #1fa834);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 24px;
-            font-size: 40px;
-            animation: pop 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
-        }
-
-        .scene-4 h2 {
-            font-size: 28px;
-            margin-bottom: 12px;
-        }
-
-        .scene-4 p {
-            font-size: 18px;
-            color: #a0a0b0;
-            margin-bottom: 30px;
-        }
-
-        .scene-4 .tagline {
-            font-size: 22px;
-            font-weight: 600;
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
         }
 
         /* Progress bar */
@@ -252,9 +36,298 @@
             top: 0;
             left: 0;
             height: 4px;
-            background: linear-gradient(90deg, #667eea, #764ba2);
+            background: linear-gradient(90deg, #00c6ff, #0072ff);
             transition: width 0.3s ease;
             z-index: 100;
+        }
+
+        /* Scene management */
+        .scene {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 95%;
+            opacity: 0;
+            transition: opacity 0.7s ease;
+            pointer-events: none;
+        }
+
+        .scene.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        /* ====== Scene 1: The Problem ====== */
+        .scene-1 h1 {
+            font-size: 32px;
+            margin-bottom: 20px;
+            font-weight: 700;
+        }
+
+        .scene-1 .video-sources {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            margin: 30px 0;
+            flex-wrap: wrap;
+        }
+
+        .scene-1 .video-card {
+            width: 140px;
+            height: 100px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 600;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.5s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .scene-1 .video-card.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .scene-1 .video-card:nth-child(1) { background: linear-gradient(135deg, #ff6b6b, #ee5a24); }
+        .scene-1 .video-card:nth-child(2) { background: linear-gradient(135deg, #4ecdc4, #2ecc71); }
+        .scene-1 .video-card:nth-child(3) { background: linear-gradient(135deg, #a29bfe, #6c5ce7); }
+        .scene-1 .video-card:nth-child(4) { background: linear-gradient(135deg, #fd79a8, #e84393); }
+
+        .scene-1 .video-card .cam-icon {
+            font-size: 28px;
+            margin-bottom: 4px;
+        }
+
+        .scene-1 .subtitle {
+            font-size: 18px;
+            color: #8899aa;
+            margin-top: 10px;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+
+        .scene-1 .subtitle.show { opacity: 1; }
+
+        /* Fake scanlines on video cards */
+        .scene-1 .video-card::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 3px,
+                rgba(0,0,0,0.1) 3px,
+                rgba(0,0,0,0.1) 4px
+            );
+            pointer-events: none;
+        }
+
+        /* ====== Scene 2: The Merge Animation ====== */
+        .scene-2 .merge-area {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 30px;
+            flex-wrap: wrap;
+        }
+
+        .scene-2 .sources-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            opacity: 0;
+            transform: translateX(-30px);
+            transition: all 0.6s ease;
+        }
+
+        .scene-2 .sources-col.show {
+            opacity: 1;
+            transform: translateX(0);
+        }
+
+        .scene-2 .source-thumb {
+            width: 90px;
+            height: 65px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 600;
+            position: relative;
+        }
+
+        .scene-2 .source-thumb:nth-child(1) { background: linear-gradient(135deg, #ff6b6b, #ee5a24); }
+        .scene-2 .source-thumb:nth-child(2) { background: linear-gradient(135deg, #4ecdc4, #2ecc71); }
+        .scene-2 .source-thumb:nth-child(3) { background: linear-gradient(135deg, #a29bfe, #6c5ce7); }
+        .scene-2 .source-thumb:nth-child(4) { background: linear-gradient(135deg, #fd79a8, #e84393); }
+
+        .scene-2 .arrow {
+            font-size: 40px;
+            color: #00c6ff;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+            animation: pulse-arrow 1.2s ease-in-out infinite;
+        }
+
+        .scene-2 .arrow.show { opacity: 1; }
+
+        @keyframes pulse-arrow {
+            0%, 100% { transform: translateX(0); opacity: 0.7; }
+            50% { transform: translateX(6px); opacity: 1; }
+        }
+
+        .scene-2 .output-quad {
+            width: 220px;
+            height: 160px;
+            border-radius: 12px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            gap: 3px;
+            background: #1a1a2e;
+            padding: 3px;
+            opacity: 0;
+            transform: translateX(30px);
+            transition: all 0.6s ease;
+            box-shadow: 0 10px 40px rgba(0, 198, 255, 0.15);
+            border: 2px solid #00c6ff33;
+        }
+
+        .scene-2 .output-quad.show {
+            opacity: 1;
+            transform: translateX(0);
+        }
+
+        .scene-2 .output-quad .quad-cell {
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-weight: 700;
+            opacity: 0;
+            transition: opacity 0.4s ease;
+        }
+
+        .scene-2 .output-quad .quad-cell.show { opacity: 1; }
+
+        .scene-2 .output-quad .quad-cell:nth-child(1) { background: linear-gradient(135deg, #ff6b6b, #ee5a24); }
+        .scene-2 .output-quad .quad-cell:nth-child(2) { background: linear-gradient(135deg, #4ecdc4, #2ecc71); }
+        .scene-2 .output-quad .quad-cell:nth-child(3) { background: linear-gradient(135deg, #a29bfe, #6c5ce7); }
+        .scene-2 .output-quad .quad-cell:nth-child(4) { background: linear-gradient(135deg, #fd79a8, #e84393); }
+
+        .scene-2 .merge-label {
+            margin-top: 30px;
+            font-size: 18px;
+            color: #8899aa;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+
+        .scene-2 .merge-label.show { opacity: 1; }
+
+        /* ====== Scene 3: Features ====== */
+        .scene-3 .features-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .scene-3 h2 {
+            font-size: 24px;
+            margin-bottom: 24px;
+            background: linear-gradient(135deg, #00c6ff, #0072ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .scene-3 .feature-item {
+            background: #1a1a2e;
+            border: 1px solid #2a2a4a;
+            border-radius: 12px;
+            padding: 18px;
+            text-align: left;
+            opacity: 0;
+            transform: translateY(15px);
+            transition: all 0.4s ease;
+        }
+
+        .scene-3 .feature-item.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .scene-3 .feature-item .icon {
+            font-size: 22px;
+            margin-bottom: 8px;
+        }
+
+        .scene-3 .feature-item .label {
+            font-size: 13px;
+            font-weight: 600;
+            color: #ccd;
+        }
+
+        /* ====== Scene 4: Built with Kiro ====== */
+        .scene-4 .final-card {
+            background: linear-gradient(135deg, #0a0a14, #1a1a2e);
+            border-radius: 20px;
+            padding: 50px;
+            border: 1px solid #2a2a4a;
+            box-shadow: 0 20px 60px rgba(0, 198, 255, 0.1);
+        }
+
+        .scene-4 .quad-icon {
+            width: 100px;
+            height: 80px;
+            margin: 0 auto 24px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            gap: 4px;
+            animation: spin-in 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+        }
+
+        .scene-4 .quad-icon div:nth-child(1) { background: #ff6b6b; border-radius: 6px 2px 2px 2px; }
+        .scene-4 .quad-icon div:nth-child(2) { background: #4ecdc4; border-radius: 2px 6px 2px 2px; }
+        .scene-4 .quad-icon div:nth-child(3) { background: #a29bfe; border-radius: 2px 2px 2px 6px; }
+        .scene-4 .quad-icon div:nth-child(4) { background: #fd79a8; border-radius: 2px 2px 6px 2px; }
+
+        @keyframes spin-in {
+            0% { transform: scale(0) rotate(-180deg); opacity: 0; }
+            100% { transform: scale(1) rotate(0deg); opacity: 1; }
+        }
+
+        .scene-4 h2 {
+            font-size: 28px;
+            margin-bottom: 12px;
+        }
+
+        .scene-4 p {
+            font-size: 17px;
+            color: #8899aa;
+            margin-bottom: 28px;
+            line-height: 1.5;
+        }
+
+        .scene-4 .tagline {
+            font-size: 20px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #00c6ff, #0072ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
 
         /* Replay button */
@@ -262,7 +335,7 @@
             position: fixed;
             bottom: 30px;
             right: 30px;
-            background: linear-gradient(135deg, #667eea, #764ba2);
+            background: linear-gradient(135deg, #00c6ff, #0072ff);
             border: none;
             color: white;
             padding: 12px 24px;
@@ -275,103 +348,89 @@
             z-index: 100;
         }
 
-        .replay-btn.show {
-            opacity: 1;
-        }
-
-        .replay-btn:hover {
-            transform: scale(1.05);
-        }
-
-        /* Animations */
-        @keyframes float {
-            0%, 100% { transform: translateY(0px); }
-            50% { transform: translateY(-10px); }
-        }
-
-        @keyframes wave {
-            0%, 100% { transform: rotate(0deg); }
-            25% { transform: rotate(10deg); }
-            75% { transform: rotate(-10deg); }
-        }
-
-        @keyframes pop {
-            0% { transform: scale(0); }
-            100% { transform: scale(1); }
-        }
-
-        @keyframes cursor-blink {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0; }
-        }
-
-        .typing-cursor {
-            display: inline-block;
-            width: 2px;
-            height: 18px;
-            background: #667eea;
-            margin-left: 2px;
-            vertical-align: middle;
-            animation: cursor-blink 0.8s infinite;
-        }
+        .replay-btn.show { opacity: 1; }
+        .replay-btn:hover { transform: scale(1.05); }
     </style>
 </head>
 <body>
     <div class="progress-bar" id="progress"></div>
 
     <div class="container">
-        <!-- Scene 1: You have an idea -->
+        <!-- Scene 1: 4 camera feeds, one output needed -->
         <div class="scene scene-1 active" id="scene1">
-            <div class="person-icon">&#128075;</div>
-            <div class="thought-bubble">
-                "I want to build a website..."
+            <h1>4 cameras. 1 output.</h1>
+            <div class="video-sources">
+                <div class="video-card" id="vc1"><div class="cam-icon">&#127909;</div>Cam 1</div>
+                <div class="video-card" id="vc2"><div class="cam-icon">&#127909;</div>Cam 2</div>
+                <div class="video-card" id="vc3"><div class="cam-icon">&#127909;</div>Cam 3</div>
+                <div class="video-card" id="vc4"><div class="cam-icon">&#127909;</div>Cam 4</div>
             </div>
-            <p class="subtitle">You have an idea. You don't know how to code.</p>
+            <p class="subtitle" id="s1sub">How do you combine them?</p>
         </div>
 
-        <!-- Scene 2: Talk to Kiro -->
+        <!-- Scene 2: The merge visualization -->
         <div class="scene scene-2" id="scene2">
-            <div class="chat-window">
-                <div class="chat-header">
-                    <div class="kiro-logo">K</div>
-                    <span>Kiro</span>
+            <div class="merge-area">
+                <div class="sources-col" id="srcCol">
+                    <div class="source-thumb">Cam 1<br>TL</div>
+                    <div class="source-thumb">Cam 2<br>TR</div>
+                    <div class="source-thumb">Cam 3<br>BL</div>
+                    <div class="source-thumb">Cam 4<br>FULL</div>
                 </div>
-                <div class="chat-message user" id="msg1">
-                    <div class="bubble">Build me a portfolio website with a dark theme</div>
-                </div>
-                <div class="chat-message kiro" id="msg2">
-                    <div class="bubble">On it! I'll create a beautiful dark-themed portfolio with sections for your work, about, and contact info.</div>
+                <div class="arrow" id="mergeArrow">&#10145;</div>
+                <div class="output-quad" id="outputQuad">
+                    <div class="quad-cell" id="qc1">TL</div>
+                    <div class="quad-cell" id="qc2">TR</div>
+                    <div class="quad-cell" id="qc3">BL</div>
+                    <div class="quad-cell" id="qc4">BR</div>
                 </div>
             </div>
+            <p class="merge-label" id="mergeLabel">Pick any quadrant from any source &mdash; merge into one video.</p>
         </div>
 
-        <!-- Scene 3: Code writes itself -->
+        <!-- Scene 3: Feature highlights -->
         <div class="scene scene-3" id="scene3">
-            <div class="code-window">
-                <div class="code-header">
-                    <div class="dot dot-red"></div>
-                    <div class="dot dot-yellow"></div>
-                    <div class="dot dot-green"></div>
+            <h2>Quad-Box Video Merger</h2>
+            <div class="features-grid">
+                <div class="feature-item" id="f1">
+                    <div class="icon">&#9200;</div>
+                    <div class="label">Time sync &amp; offsets</div>
                 </div>
-                <div class="code-body">
-                    <div class="code-line" id="line1"><span class="comment">// Kiro writes the code for you...</span></div>
-                    <div class="code-line" id="line2"><span class="keyword">function</span> <span class="function">createPortfolio</span>() {</div>
-                    <div class="code-line" id="line3">&nbsp;&nbsp;<span class="keyword">const</span> theme = <span class="string">"dark"</span>;</div>
-                    <div class="code-line" id="line4">&nbsp;&nbsp;<span class="keyword">const</span> sections = [<span class="string">"work"</span>, <span class="string">"about"</span>, <span class="string">"contact"</span>];</div>
-                    <div class="code-line" id="line5">&nbsp;&nbsp;<span class="function">buildSite</span>(theme, sections);</div>
-                    <div class="code-line" id="line6">}</div>
+                <div class="feature-item" id="f2">
+                    <div class="icon">&#127912;</div>
+                    <div class="label">Map any quadrant to any slot</div>
+                </div>
+                <div class="feature-item" id="f3">
+                    <div class="icon">&#128230;</div>
+                    <div class="label">Batch processing</div>
+                </div>
+                <div class="feature-item" id="f4">
+                    <div class="icon">&#128190;</div>
+                    <div class="label">Save &amp; load presets</div>
+                </div>
+                <div class="feature-item" id="f5">
+                    <div class="icon">&#128065;</div>
+                    <div class="label">Live preview</div>
+                </div>
+                <div class="feature-item" id="f6">
+                    <div class="icon">&#128421;</div>
+                    <div class="label">GUI &amp; CLI modes</div>
                 </div>
             </div>
-            <p class="magic-label" id="magicLabel">Kiro writes the code. You don't have to.</p>
         </div>
 
-        <!-- Scene 4: Done! -->
+        <!-- Scene 4: Built with Kiro -->
         <div class="scene scene-4" id="scene4">
-            <div class="result-card">
-                <div class="checkmark">&#10003;</div>
-                <h2>Your website is ready.</h2>
-                <p>You described it. Kiro built it.</p>
-                <div class="tagline">Kiro &mdash; Your AI Developer</div>
+            <div class="final-card">
+                <div class="quad-icon">
+                    <div></div>
+                    <div></div>
+                    <div></div>
+                    <div></div>
+                </div>
+                <h2>Quad-Box Video Merger</h2>
+                <p>Combine up to 4 camera feeds into a single synchronized output.<br>CLI. GUI. One tool.</p>
+                <div class="tagline">Built with Kiro</div>
             </div>
         </div>
     </div>
@@ -384,72 +443,98 @@
         const scenes = document.querySelectorAll('.scene');
         const progress = document.getElementById('progress');
         const replayBtn = document.getElementById('replayBtn');
-        let timeline;
+        let timeouts = [];
+
+        function clearAllTimeouts() {
+            timeouts.forEach(t => clearTimeout(t));
+            timeouts = [];
+        }
+
+        function schedule(fn, delay) {
+            timeouts.push(setTimeout(fn, delay));
+        }
 
         function showScene(index) {
             scenes.forEach(s => s.classList.remove('active'));
-            if (scenes[index]) {
-                scenes[index].classList.add('active');
-            }
-            // Update progress
+            if (scenes[index]) scenes[index].classList.add('active');
             progress.style.width = ((index + 1) / scenes.length * 100) + '%';
         }
 
-        function animateScene2() {
-            const msg1 = document.getElementById('msg1');
-            const msg2 = document.getElementById('msg2');
-            msg1.classList.remove('show');
-            msg2.classList.remove('show');
+        function resetAll() {
+            // Scene 1
+            document.querySelectorAll('.scene-1 .video-card').forEach(c => c.classList.remove('show'));
+            document.getElementById('s1sub').classList.remove('show');
+            // Scene 2
+            document.getElementById('srcCol').classList.remove('show');
+            document.getElementById('mergeArrow').classList.remove('show');
+            document.getElementById('outputQuad').classList.remove('show');
+            document.querySelectorAll('.scene-2 .quad-cell').forEach(c => c.classList.remove('show'));
+            document.getElementById('mergeLabel').classList.remove('show');
+            // Scene 3
+            document.querySelectorAll('.scene-3 .feature-item').forEach(f => f.classList.remove('show'));
+            // Replay
+            replayBtn.classList.remove('show');
+        }
 
-            setTimeout(() => msg1.classList.add('show'), 300);
-            setTimeout(() => msg2.classList.add('show'), 1200);
+        function animateScene1() {
+            const cards = document.querySelectorAll('.scene-1 .video-card');
+            cards.forEach((card, i) => {
+                schedule(() => card.classList.add('show'), 200 + i * 250);
+            });
+            schedule(() => document.getElementById('s1sub').classList.add('show'), 200 + cards.length * 250 + 300);
+        }
+
+        function animateScene2() {
+            schedule(() => document.getElementById('srcCol').classList.add('show'), 200);
+            schedule(() => document.getElementById('mergeArrow').classList.add('show'), 700);
+            schedule(() => document.getElementById('outputQuad').classList.add('show'), 1000);
+            const cells = document.querySelectorAll('.scene-2 .quad-cell');
+            cells.forEach((cell, i) => {
+                schedule(() => cell.classList.add('show'), 1300 + i * 250);
+            });
+            schedule(() => document.getElementById('mergeLabel').classList.add('show'), 2500);
         }
 
         function animateScene3() {
-            const lines = document.querySelectorAll('.scene-3 .code-line');
-            const label = document.getElementById('magicLabel');
-            lines.forEach(l => l.classList.remove('show'));
-            label.classList.remove('show');
-
-            lines.forEach((line, i) => {
-                setTimeout(() => line.classList.add('show'), 300 + i * 400);
+            const items = document.querySelectorAll('.scene-3 .feature-item');
+            items.forEach((item, i) => {
+                schedule(() => item.classList.add('show'), 200 + i * 300);
             });
-            setTimeout(() => label.classList.add('show'), 300 + lines.length * 400 + 200);
         }
 
         function runTimeline() {
+            clearAllTimeouts();
+            resetAll();
             currentScene = 0;
-            replayBtn.classList.remove('show');
             showScene(0);
+            animateScene1();
 
-            timeline = setTimeout(() => {
+            schedule(() => {
                 currentScene = 1;
                 showScene(1);
                 animateScene2();
-
-                timeline = setTimeout(() => {
-                    currentScene = 2;
-                    showScene(2);
-                    animateScene3();
-
-                    timeline = setTimeout(() => {
-                        currentScene = 3;
-                        showScene(3);
-
-                        setTimeout(() => {
-                            replayBtn.classList.add('show');
-                        }, 1000);
-                    }, SCENE_DURATION);
-                }, SCENE_DURATION);
             }, SCENE_DURATION);
+
+            schedule(() => {
+                currentScene = 2;
+                showScene(2);
+                animateScene3();
+            }, SCENE_DURATION * 2);
+
+            schedule(() => {
+                currentScene = 3;
+                showScene(3);
+            }, SCENE_DURATION * 3);
+
+            schedule(() => {
+                replayBtn.classList.add('show');
+            }, SCENE_DURATION * 3 + 1500);
         }
 
         function replay() {
-            clearTimeout(timeline);
             runTimeline();
         }
 
-        // Start on load
         window.addEventListener('load', () => {
             runTimeline();
         });
